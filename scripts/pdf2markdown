@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+#
+# pdf2markdown - Convert a PDF to clean Markdown with external image files.
+#
+# Thin wrapper around scripts/pdf2markdown.py: it provisions a local virtual
+# environment with docling on first run, then runs the converter inside it.
+#
+# Usage:
+#   pdf2markdown [-f|--force] [--no-ocr] <input.pdf> <output_dir>
+#
+# The venv lives in the user's cache dir (not next to the script), so the
+# script directory can be read-only / installed system-wide.
+#
+# Environment:
+#   PDF2MARKDOWN_VENV   Override the venv location
+#                       (default: ${XDG_CACHE_HOME:-~/.cache}/pdf2markdown/venv)
+#   PYTHON              Python interpreter used to create the venv (default: python3)
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV="${PDF2MARKDOWN_VENV:-${XDG_CACHE_HOME:-$HOME/.cache}/pdf2markdown/venv}"
+PYTHON="${PYTHON:-python3}"
+
+# (Re)provision the venv if it is missing docling or any post-processing dep.
+# This also picks up newly added requirements for an already-created venv.
+needs_setup=1
+if [ -x "$VENV/bin/docling" ] && \
+   "$VENV/bin/python" -c 'import cv2, numpy, scipy, PIL, rapidocr, onnxruntime, vtracer' 2>/dev/null; then
+    needs_setup=0
+fi
+
+if [ "$needs_setup" -eq 1 ]; then
+    echo "Setting up virtual environment at $VENV (installing dependencies)..." >&2
+    mkdir -p "$(dirname "$VENV")"
+    "$PYTHON" -m venv "$VENV"
+    "$VENV/bin/pip" install --upgrade pip
+    "$VENV/bin/pip" install -r "$SCRIPT_DIR/requirements.txt"
+fi
+
+exec "$VENV/bin/python" "$SCRIPT_DIR/pdf2markdown.py" "$@"

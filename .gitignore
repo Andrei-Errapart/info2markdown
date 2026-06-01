@@ -1,0 +1,8 @@
+# scripts/pdf2markdown keeps its venv in the user's cache dir
+# (${XDG_CACHE_HOME:-~/.cache}/pdf2markdown/venv), not in the repo. This only
+# matters if you override PDF2MARKDOWN_VENV to a path inside the project.
+scripts/.venv/
+
+# Python bytecode cache
+__pycache__/
+*.pyc

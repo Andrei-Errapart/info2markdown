@@ -1,0 +1,19 @@
+# Dependencies for scripts/pdf2markdown
+# Conversion engine + image post-processing copied from /home/andrei/2026/mdoc.
+
+# PDF -> Markdown conversion engine.
+docling>=2.58.0
+
+# Image post-processing (table/text/vector detection). docling already pulls in
+# opencv, numpy, scipy and Pillow, but we import them directly so pin them here.
+opencv-python>=4.8.0   # table grid-line detection (cv2)
+numpy>=1.24.0
+scipy>=1.10.0          # edge detection for image classification
+Pillow>=10.0.0
+
+# OCR via RapidOCR (no system binary required, unlike Tesseract).
+rapidocr>=3.0.0
+onnxruntime>=1.16.0    # inference backend RapidOCR runs on
+
+# Raster -> vector tracing for diagrams.
+vtracer>=0.6.11
