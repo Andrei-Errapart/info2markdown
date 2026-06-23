@@ -21,7 +21,7 @@ text-only images are flattened into inline Markdown, line-art diagrams are
 traced to SVG, and photos are left as-is. Use --no-postprocess to skip it.
 
 Usage:
-    pdf2markdown.py [options] <input.pdf> <output_dir>
+    pdf2markdown.py [options] <input.pdf> [output_dir]
 
 Options:
     -f, --force          Overwrite existing <stem>.md / <stem>.images/ in output dir
@@ -186,8 +186,8 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("pdf", type=Path, metavar="input.pdf", help="Input PDF file")
-    parser.add_argument("output_dir", type=Path, metavar="output_dir",
-                        help="Directory for the PDF copy, images, and .md output")
+    parser.add_argument("output_dir", type=Path, metavar="output_dir", nargs="?",
+                        help="Directory for the PDF copy, images, and .md output (default: PDF's directory)")
     parser.add_argument("-f", "--force", action="store_true",
                         help="Overwrite existing .md / .images output")
     parser.add_argument("--no-ocr", dest="ocr", action="store_false",
@@ -196,8 +196,9 @@ def main() -> int:
                         help="Skip the image post-processing pass (keep all images as PNG)")
     args = parser.parse_args()
 
+    output_dir = args.output_dir if args.output_dir is not None else args.pdf.resolve().parent
     pdf_copy, out_md, count, pp = convert(
-        args.pdf.resolve(), args.output_dir, ocr=args.ocr, force=args.force,
+        args.pdf.resolve(), output_dir, ocr=args.ocr, force=args.force,
         postprocess=args.postprocess,
     )
 
