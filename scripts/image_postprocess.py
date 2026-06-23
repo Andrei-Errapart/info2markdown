@@ -69,9 +69,9 @@ class ImageType(Enum):
 class Ocr:
     """Thin RapidOCR wrapper returning text regions with (x, y, w, h) bboxes.
 
-    Uses PP-OCRv5's unified recognition model, which is multilingual (Simplified
-    & Traditional Chinese, English and Japanese in one model) — so both English
-    and Japanese datasheets are read with a single engine, no per-doc switching.
+    Uses PP-OCRv5 mobile models (det + rec, CH lang) which cover Simplified &
+    Traditional Chinese, English and Japanese — both English and Japanese
+    datasheets are read with a single engine, no per-doc switching.
     """
 
     def __init__(self) -> None:
