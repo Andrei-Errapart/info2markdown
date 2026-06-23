@@ -43,6 +43,7 @@ TEXT_MIN_MEAN_CONF = 0.65    # mean OCR confidence
 TEXT_MAX_COLOR_UNIQUENESS = 0.05  # mostly few colors (ink on a plain ground)
 
 DIAGRAM_SCORE_MIN = 0.5      # ImageClassifier diagram score above this -> vectorize
+DIAGRAM_PHASH_THRESHOLD = 8  # max Hamming distance (out of 64 bits) to consider near-duplicate
 
 # vtracer parameters (from mdoc PngToSvgConverter.convert defaults)
 VTRACER_PARAMS = dict(
@@ -249,6 +250,50 @@ def png_to_svg(png_path: Path, svg_path: Path) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Perceptual hash for near-duplicate diagram detection
+# ---------------------------------------------------------------------------
+def _hamming(a: bytes, b: bytes) -> int:
+    diff = np.frombuffer(a, dtype=np.uint8) ^ np.frombuffer(b, dtype=np.uint8)
+    return int(np.unpackbits(diff).sum())
+
+
+def diagram_phash(image_path: Path) -> bytes:
+    """Return a 64-bit dHash fingerprint for near-duplicate diagram detection.
+
+    Composites transparency on white, trims the background border, resizes to
+    9x8, converts to greyscale, then computes column-wise difference hash.
+    Returns b'\\x00'*8 on any error so callers can treat it as "no match".
+    """
+    try:
+        from PIL import Image, ImageChops
+        img = Image.open(image_path).convert("RGBA")
+        bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
+        bg.paste(img, mask=img.split()[3])
+        rgb = bg.convert("RGB")
+
+        # Trim border pixels that are close to the corner background colour.
+        corner = rgb.getpixel((0, 0))
+        diff = ImageChops.difference(rgb, Image.new("RGB", rgb.size, corner))
+        threshold = diff.point(lambda x: 0 if x <= 8 else 255)
+        bbox = threshold.getbbox()
+        if bbox:
+            pad = 1
+            w, h = rgb.size
+            rgb = rgb.crop((
+                max(0, bbox[0] - pad), max(0, bbox[1] - pad),
+                min(w, bbox[2] + pad), min(h, bbox[3] + pad),
+            ))
+
+        small = rgb.resize((9, 8), Image.LANCZOS).convert("L")
+        arr = np.array(small, dtype=np.uint8)       # shape (8, 9)
+        diff_arr = arr[:, 1:] > arr[:, :-1]         # shape (8, 8), bool
+        return np.packbits(diff_arr.flatten()).tobytes()
+    except Exception as exc:
+        logger.debug("diagram_phash failed for %s: %s", image_path.name, exc)
+        return b"\x00" * 8
+
+
+# ---------------------------------------------------------------------------
 # Classification + orchestration
 # ---------------------------------------------------------------------------
 def classify(image_path: Path, ocr: Ocr) -> Tuple[ImageType, object]:
@@ -286,6 +331,9 @@ def postprocess(md_path: Path, images_dirname: str) -> Dict[str, int]:
     ocr: Optional[Ocr] = None
     decisions: Dict[str, Tuple[ImageType, object]] = {}  # ref-target -> (type, payload)
     counts = {t.value: 0 for t in ImageType}
+    counts["visual_dedupe_refs"] = 0
+    counts["visual_dedupe_files"] = 0
+    canonical_diagrams: Dict[bytes, Path] = {}  # fingerprint -> canonical SVG path
 
     def decide(target: str) -> Tuple[ImageType, object]:
         nonlocal ocr
@@ -314,7 +362,30 @@ def postprocess(md_path: Path, images_dirname: str) -> Dict[str, int]:
         if kind == ImageType.DIAGRAM:
             png_path = md_path.parent / target
             svg_path = png_path.with_suffix(".svg")
+
+            # If this exact target was already processed (PNG traced → SVG on a
+            # prior ref), the SVG exists and the PNG is gone — just reuse it.
+            if svg_path.is_file() and not png_path.is_file():
+                return f"![{alt}]({prefix}{svg_path.name})"
+
+            if not png_path.is_file():
+                return match.group(0)
+
+            fingerprint = diagram_phash(png_path)
+            canonical_svg: Optional[Path] = None
+            for known_fp, known_svg in canonical_diagrams.items():
+                if _hamming(fingerprint, known_fp) <= DIAGRAM_PHASH_THRESHOLD:
+                    canonical_svg = known_svg
+                    break
+
+            if canonical_svg is not None:
+                png_path.unlink()
+                counts["visual_dedupe_files"] += 1
+                counts["visual_dedupe_refs"] += 1
+                return f"![{alt}]({prefix}{canonical_svg.name})"
+
             if png_to_svg(png_path, svg_path):
+                canonical_diagrams[fingerprint] = svg_path
                 return f"![{alt}]({prefix}{svg_path.name})"
             return match.group(0)  # keep PNG if tracing failed
         return match.group(0)  # PHOTO / UNKNOWN: leave as-is
@@ -341,4 +412,4 @@ def postprocess(md_path: Path, images_dirname: str) -> Dict[str, int]:
     return counts
 
 
-__all__ = ["postprocess", "ImageType"]
+__all__ = ["postprocess", "ImageType", "diagram_phash", "_hamming", "DIAGRAM_PHASH_THRESHOLD"]

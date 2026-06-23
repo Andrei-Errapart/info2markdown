@@ -43,8 +43,9 @@ upstream source of truth if this logic needs updating.
   `docling` next to `sys.executable`). Pipeline: copy the PDF → run `docling`
   with `--image-export-mode embedded` into a **temp dir** → `split_images()`
   decodes the base64 data-URIs into `<stem>.images/` and rewrites the links →
-  hand off to post-processing. The intermediate base64 markdown is discarded; it
-  never lands in the output dir.
+  exact duplicate images are canonicalized to SHA-256 filenames → hand off to
+  post-processing. The intermediate base64 markdown is discarded; it never lands
+  in the output dir.
 
 - **`scripts/image_postprocess.py`** — runs OCR (RapidOCR, **PP-OCRv5 multilingual**
   model covering English + Japanese) plus structural analysis on *every*

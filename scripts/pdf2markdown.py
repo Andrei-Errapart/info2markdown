@@ -13,7 +13,7 @@ Given an input PDF and an output directory, this produces in that directory:
 
 docling (https://github.com/DS4SD/docling) first emits Markdown with base64-
 embedded PNG images; this script then splits those out into separate image
-files and rewrites the links to point at them.
+files, canonicalizes exact duplicates, and rewrites the links to point at them.
 
 A post-processing pass (see image_postprocess.py) then inspects every extracted
 image and, where confident, replaces it with something better: tables and
@@ -39,13 +39,16 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Tuple
+from typing import Dict, Tuple
 
 # Matches docling's embedded images: ![alt](data:image/<fmt>;base64,<data>)
 # (ported from /home/andrei/2026/mdoc/divide_png_md)
 IMAGE_RE = re.compile(
     r'!\[([^\]]*)\]\(data:image/(png|jpeg|jpg);base64,([A-Za-z0-9+/=]+)\)'
 )
+
+# Matches a Markdown image: ![alt](target)
+IMG_REF_RE = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
 
 
 def find_docling() -> str:
@@ -131,11 +134,117 @@ def split_images(source_md: Path, out_md: Path, images_dir: Path) -> int:
     return counter["n"]
 
 
+def image_content_hash(image_path: Path) -> str:
+    """Return the content hash used to canonicalize extracted image files."""
+    h = hashlib.sha256()
+    with image_path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def deduplicate_images(md_path: Path, images_dirname: str) -> Dict[str, object]:
+    """Canonicalize exact duplicate extracted images and rewrite Markdown refs.
+
+    Exact-byte duplicates are collapsed to one SHA-256-named file. The helper
+    boundary is intentionally content-hash based so perceptual dedupe can be
+    layered in later without changing callers.
+    """
+    content = md_path.read_text(encoding="utf-8")
+    images_dir = md_path.parent / images_dirname
+    prefix = f"{images_dirname}/"
+    stats: Dict[str, object] = {
+        "hash_algorithm": "sha256",
+        "total_refs": 0,
+        "in_scope_refs": 0,
+        "unique_images": 0,
+        "duplicate_refs": 0,
+        "renamed_files": 0,
+        "removed_files": 0,
+        "missing_files": 0,
+        "canonical_by_original": {},
+        "duplicate_groups": {},
+    }
+
+    canonical_by_digest: Dict[str, str] = {}
+    canonical_by_original: Dict[str, str] = {}
+    duplicate_groups: Dict[str, list] = {}
+
+    def resolve_target(target: str) -> Tuple[str, Path] | None:
+        stripped = target.strip()
+        if not stripped.startswith(prefix):
+            return None
+        rel_name = stripped[len(prefix):]
+        rel_path = Path(rel_name)
+        if not rel_name or len(rel_path.parts) != 1:
+            return None
+        return rel_name, images_dir / rel_name
+
+    def replace(match: "re.Match[str]") -> str:
+        alt, target = match.group(1), match.group(2)
+        stats["total_refs"] = int(stats["total_refs"]) + 1
+        resolved = resolve_target(target)
+        if resolved is None:
+            return match.group(0)
+
+        rel_name, image_path = resolved
+        stats["in_scope_refs"] = int(stats["in_scope_refs"]) + 1
+        if not image_path.is_file():
+            stats["missing_files"] = int(stats["missing_files"]) + 1
+            return match.group(0)
+
+        digest = image_content_hash(image_path)
+        suffix = image_path.suffix.lower() or ".img"
+        seen_digest = digest in canonical_by_digest
+        canonical_name = canonical_by_digest.setdefault(digest, f"{digest}{suffix}")
+        if seen_digest:
+            stats["duplicate_refs"] = int(stats["duplicate_refs"]) + 1
+
+        canonical_by_original[rel_name] = canonical_name
+        duplicate_groups.setdefault(canonical_name, []).append(rel_name)
+        return f"![{alt}]({prefix}{canonical_name})"
+
+    new_content = IMG_REF_RE.sub(replace, content)
+
+    stats["unique_images"] = len(canonical_by_digest)
+    stats["canonical_by_original"] = canonical_by_original
+    stats["duplicate_groups"] = {
+        canonical: originals
+        for canonical, originals in duplicate_groups.items()
+        if len(originals) > 1
+    }
+
+    if images_dir.is_dir():
+        canonical_sources: Dict[str, Path] = {}
+        for original_name, canonical_name in canonical_by_original.items():
+            canonical_sources.setdefault(canonical_name, images_dir / original_name)
+
+        for canonical_name, source_path in canonical_sources.items():
+            canonical_path = images_dir / canonical_name
+            if source_path == canonical_path:
+                continue
+            if not canonical_path.exists():
+                source_path.rename(canonical_path)
+                stats["renamed_files"] = int(stats["renamed_files"]) + 1
+
+        referenced = set(canonical_sources)
+        touched = set(canonical_by_original)
+        for f in list(images_dir.iterdir()):
+            if f.is_file() and f.name in touched and f.name not in referenced:
+                f.unlink()
+                stats["removed_files"] = int(stats["removed_files"]) + 1
+        if images_dir.exists() and not any(images_dir.iterdir()):
+            images_dir.rmdir()
+
+    md_path.write_text(new_content, encoding="utf-8")
+    return stats
+
+
 def convert(pdf: Path, output_dir: Path, ocr: bool, force: bool,
             postprocess: bool) -> Tuple[Path, Path, int, dict]:
     """Run the full PDF -> Markdown pipeline.
 
-    Returns (pdf_copy, out_md, image_count, postprocess_counts).
+    Returns (pdf_copy, out_md, image_count, pipeline_stats).
     """
     if not pdf.is_file():
         raise SystemExit(f"Error: not a file: {pdf}")
@@ -170,13 +279,16 @@ def convert(pdf: Path, output_dir: Path, ocr: bool, force: bool,
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    pp_counts: dict = {}
+    stats = {"dedupe": {}, "postprocess": {}}
+    if count:
+        stats["dedupe"] = deduplicate_images(out_md, images_dir.name)
+
     if postprocess and count:
         import image_postprocess
         print("Post-processing images (OCR + table/text/vector detection)...", flush=True)
-        pp_counts = image_postprocess.postprocess(out_md, images_dir.name)
+        stats["postprocess"] = image_postprocess.postprocess(out_md, images_dir.name)
 
-    return pdf_copy, out_md, count, pp_counts
+    return pdf_copy, out_md, count, stats
 
 
 def main() -> int:
@@ -197,10 +309,12 @@ def main() -> int:
     args = parser.parse_args()
 
     output_dir = args.output_dir if args.output_dir is not None else args.pdf.resolve().parent
-    pdf_copy, out_md, count, pp = convert(
+    pdf_copy, out_md, count, stats = convert(
         args.pdf.resolve(), output_dir, ocr=args.ocr, force=args.force,
         postprocess=args.postprocess,
     )
+    pp = stats.get("postprocess", {})
+    dedupe = stats.get("dedupe", {})
 
     images_dir = out_md.parent / (out_md.stem + ".images")
     remaining = len(list(images_dir.iterdir())) if images_dir.is_dir() else 0
@@ -209,10 +323,17 @@ def main() -> int:
     print(f"  PDF copy : {pdf_copy}")
     print(f"  Markdown : {out_md}")
     print(f"  Images   : {count} extracted, {remaining} kept in {images_dir}/")
+    if dedupe:
+        print(f"  Dedupe   : {dedupe.get('duplicate_refs', 0)} duplicate ref(s), "
+              f"{dedupe.get('removed_files', 0)} file(s) removed")
     if pp:
         print(f"  Inlined  : {pp.get('table', 0)} table(s), {pp.get('text', 0)} text image(s)")
         print(f"  Vector   : {pp.get('diagram', 0)} diagram(s) -> SVG")
         print(f"  Kept PNG : {pp.get('photo', 0)} photo(s)")
+        vdr = pp.get("visual_dedupe_refs", 0)
+        if vdr:
+            print(f"  Visual dedup: {vdr} duplicate diagram ref(s), "
+                  f"{pp.get('visual_dedupe_files', 0)} PNG(s) removed")
     return 0
 
 
