@@ -204,7 +204,7 @@ def main() -> int:
     images_dir = out_md.parent / (out_md.stem + ".images")
     remaining = len(list(images_dir.iterdir())) if images_dir.is_dir() else 0
 
-    print("\n✅ Done")
+    print("\nDone")
     print(f"  PDF copy : {pdf_copy}")
     print(f"  Markdown : {out_md}")
     print(f"  Images   : {count} extracted, {remaining} kept in {images_dir}/")

@@ -75,10 +75,14 @@ class Ocr:
     """
 
     def __init__(self) -> None:
-        from rapidocr import RapidOCR, OCRVersion, LangDet, LangRec
+        from rapidocr import RapidOCR, OCRVersion, LangDet, LangRec, ModelType
+        # PP-OCRv5 only ships "mobile"/"server" variants (no "small", which is the
+        # default that newer rapidocr would otherwise pick and reject). Pin mobile.
         self._engine = RapidOCR(params={
             "Det.ocr_version": OCRVersion.PPOCRV5, "Det.lang_type": LangDet.CH,
+            "Det.model_type": ModelType.MOBILE,
             "Rec.ocr_version": OCRVersion.PPOCRV5, "Rec.lang_type": LangRec.CH,
+            "Rec.model_type": ModelType.MOBILE,
         })
 
     def regions(self, image_path: Path) -> List[Dict]:
