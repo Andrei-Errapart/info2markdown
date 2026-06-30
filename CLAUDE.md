@@ -66,11 +66,18 @@ upstream source of truth if this logic needs updating.
   - **TABLE** (OpenCV grid-line detection) → reconstruct a Markdown table from
     OCR cell positions, inline it
   - **TEXT** (text-dominant, low color count) → inline the OCR'd text
-  - **DIAGRAM** (high edge density / few colors) → trace to `.svg` via `vtracer`
+  - **EQUATION** (a `Equation N.` label just before the image ref) → LaTeX-OCR
+    (`rapid_latex_ocr`) → inline `$…$`. This is for *image* equations (TI HTML).
+    PDF equations are vector/text, handled by docling's `--enrich-formula` model
+    (emits `$$…$$`), not here.
+  - **DIAGRAM** (high edge density / few colors) → trace to `.svg` via `vtracer`,
+    but **only for clean, simple line art** (`DIAGRAM_MAX_TEXT_REGIONS`,
+    `DIAGRAM_MAX_COLORS`): vtracer deforms complex images and renders text as
+    unreadable paths, so text-heavy / colour-complex images stay as PNG instead.
   - **PHOTO** → leave the raster as-is
 
-  Images replaced by inline text/table or by an SVG are deleted as orphans, so
-  the images dir only keeps what's still referenced.
+  Images replaced by inline text/table/LaTeX or by an SVG are deleted as orphans,
+  so the images dir only keeps what's still referenced.
 
 - **`scripts/datasheet_sources.py`** — vendor-pluggable HTML datasheet fetchers.
   Defines the `DatasheetSource` interface; two adapters (`TIDocumentViewerSource`

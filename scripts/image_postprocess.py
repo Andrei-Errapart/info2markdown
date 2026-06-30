@@ -44,6 +44,11 @@ TEXT_MAX_COLOR_UNIQUENESS = 0.05  # mostly few colors (ink on a plain ground)
 
 DIAGRAM_SCORE_MIN = 0.5      # ImageClassifier diagram score above this -> vectorize
 DIAGRAM_PHASH_THRESHOLD = 8  # max Hamming distance (out of 64 bits) to consider near-duplicate
+# DIAGRAM -> SVG is deliberately CONSERVATIVE: vtracer deforms complex images and
+# renders text as unreadable paths. Only clean, low-text, few-colour line art is
+# vectorised; everything else stays a readable raster (kept as PNG).
+DIAGRAM_MAX_TEXT_REGIONS = 3   # more OCR text regions than this -> keep raster
+DIAGRAM_MAX_COLORS = 1024      # more distinct colours than this -> too complex to trace
 
 # An image is treated as an EQUATION (LaTeX-OCR'd, not vectorised/OCR'd-as-text)
 # when the Markdown labels it as one just before the ref, e.g. a standalone
@@ -254,7 +259,7 @@ def image_metrics(image_path: Path) -> Dict:
         arr = np.array(Image.open(image_path).convert("RGB"))
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("Could not read %s: %s", image_path.name, exc)
-        return {"edge_density": 0.0, "color_uniqueness": 1.0,
+        return {"edge_density": 0.0, "color_uniqueness": 1.0, "unique_colors": 0,
                 "is_diagram_score": 0.0, "shape": (0, 0)}
 
     edges = ndimage.sobel(arr.mean(axis=2))
@@ -268,6 +273,7 @@ def image_metrics(image_path: Path) -> Dict:
     if edge_density > 0.15:
         score += 0.15
     return {"edge_density": edge_density, "color_uniqueness": color_uniqueness,
+            "unique_colors": unique_colors,
             "is_diagram_score": score, "shape": arr.shape[:2]}
 
 
@@ -368,7 +374,13 @@ def classify(image_path: Path, ocr: Ocr) -> Tuple[ImageType, object]:
             return ImageType.TEXT, text
 
     if metrics["is_diagram_score"] > DIAGRAM_SCORE_MIN:
-        return ImageType.DIAGRAM, None
+        # Only vectorise clean, simple line art. vtracer deforms colour-complex
+        # images and renders text as unreadable paths, so text-heavy or complex
+        # images are kept as a readable raster instead.
+        if (len(regions) <= DIAGRAM_MAX_TEXT_REGIONS
+                and metrics.get("unique_colors", 0) <= DIAGRAM_MAX_COLORS):
+            return ImageType.DIAGRAM, None
+        return ImageType.PHOTO, None
 
     return ImageType.PHOTO, None
 
@@ -392,6 +404,12 @@ def postprocess(md_path: Path, images_dirname: str) -> Dict[str, int]:
     counts["visual_dedupe_files"] = 0
     canonical_diagrams: Dict[bytes, Path] = {}  # fingerprint -> canonical SVG path
 
+    def get_latex_ocr() -> LatexOcr:
+        nonlocal latex_ocr
+        if latex_ocr is None:
+            latex_ocr = LatexOcr()
+        return latex_ocr
+
     def decide(target: str) -> Tuple[ImageType, object]:
         nonlocal ocr
         if target in decisions:
@@ -409,16 +427,13 @@ def postprocess(md_path: Path, images_dirname: str) -> Dict[str, int]:
 
     def equation_latex(target: str) -> Optional[str]:
         """LaTeX for an equation-labelled image (cached); None if unreadable."""
-        nonlocal latex_ocr
         if target in equations:
             return equations[target]
         img_path = md_path.parent / target
         if not img_path.is_file():
             equations[target] = None
             return None
-        if latex_ocr is None:
-            latex_ocr = LatexOcr()
-        latex = latex_ocr.to_latex(img_path)
+        latex = get_latex_ocr().to_latex(img_path)
         equations[target] = latex
         return latex
 

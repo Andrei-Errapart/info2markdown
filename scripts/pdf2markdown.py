@@ -83,7 +83,10 @@ def build_docling_cmd(docling: str, source: Path, out_dir: Path, ocr: bool) -> l
     if source.suffix.lower() == ".pdf":
         if ocr:
             cmd.append("--ocr")
-        cmd += ["--tables", "--table-mode", "accurate"]
+        # --enrich-formula: detect formula regions and emit them as LaTeX. PDF
+        # equations are vector/text (not images), so this is the only way to get
+        # them; the HTML route handles its image equations via LaTeX-OCR instead.
+        cmd += ["--tables", "--table-mode", "accurate", "--enrich-formula"]
     cmd += ["--output", str(out_dir)]
     return cmd
 
@@ -424,17 +427,23 @@ def main() -> int:
 
     images_dir = out_md.parent / (out_md.stem + ".images")
     remaining = len(list(images_dir.iterdir())) if images_dir.is_dir() else 0
+    # Equation count from the actual output: docling --enrich-formula emits
+    # $$...$$ blocks (PDF), while the HTML route inlines image equations as
+    # $...$ via LaTeX-OCR (pp["equation"]).
+    md_text = out_md.read_text(encoding="utf-8") if out_md.is_file() else ""
+    equation_count = len(re.findall(r"\$\$.+?\$\$", md_text, re.S)) + pp.get("equation", 0)
 
     print("\nDone")
     print(f"  Source   : {source_copy}")
     print(f"  Markdown : {out_md}")
     print(f"  Images   : {count} extracted, {remaining} kept in {images_dir}/")
+    if equation_count:
+        print(f"  Equations: {equation_count} formula(s) -> LaTeX")
     if dedupe:
         print(f"  Dedupe   : {dedupe.get('duplicate_refs', 0)} duplicate ref(s), "
               f"{dedupe.get('removed_files', 0)} file(s) removed")
     if pp:
         print(f"  Inlined  : {pp.get('table', 0)} table(s), {pp.get('text', 0)} text image(s)")
-        print(f"  Equations: {pp.get('equation', 0)} formula(s) -> LaTeX")
         print(f"  Vector   : {pp.get('diagram', 0)} diagram(s) -> SVG")
         print(f"  Kept PNG : {pp.get('photo', 0)} photo(s)")
         vdr = pp.get("visual_dedupe_refs", 0)
