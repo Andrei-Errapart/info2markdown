@@ -45,6 +45,8 @@ from pathlib import Path
 from typing import Dict, Tuple
 from urllib.parse import unquote, urlsplit
 
+from datasheet_sources import find_source
+
 try:
     import certifi
     _certifi = True
@@ -258,6 +260,10 @@ def is_url(value: str) -> bool:
     return urlsplit(value).scheme in ("http", "https")
 
 
+def _looks_like_pdf(url: str) -> bool:
+    return Path(urlsplit(url).path).suffix.lower() == ".pdf"
+
+
 def _url_stem(url: str) -> str:
     """Derive a clean filename stem from a URL's path (query string ignored)."""
     name = Path(unquote(urlsplit(url).path)).name
@@ -366,16 +372,25 @@ def main() -> int:
     download_dir = None
     if is_url(args.pdf):
         download_dir = Path(tempfile.mkdtemp(prefix="pdf2markdown_dl_"))
-        pdf_path = download_pdf(args.pdf, download_dir)
+        source = find_source(args.pdf)
+        if source is not None:
+            print(f"Fetching {source.name} HTML datasheet ...", flush=True)
+            input_path, _ = source.fetch(args.pdf, download_dir)
+        elif _looks_like_pdf(args.pdf):
+            input_path = download_pdf(args.pdf, download_dir)
+        else:
+            raise SystemExit(
+                f"Error: unsupported URL (no datasheet source matched, and not a "
+                f".pdf): {args.pdf}")
         default_output = Path.cwd()
     else:
-        pdf_path = Path(args.pdf).resolve()
-        default_output = pdf_path.parent
+        input_path = Path(args.pdf).resolve()
+        default_output = input_path.parent
 
     try:
         output_dir = args.output_dir if args.output_dir is not None else default_output
-        pdf_copy, out_md, count, stats = convert(
-            pdf_path, output_dir, ocr=args.ocr, force=args.force,
+        source_copy, out_md, count, stats = convert(
+            input_path, output_dir, ocr=args.ocr, force=args.force,
             postprocess=args.postprocess,
         )
     finally:
@@ -388,7 +403,7 @@ def main() -> int:
     remaining = len(list(images_dir.iterdir())) if images_dir.is_dir() else 0
 
     print("\nDone")
-    print(f"  PDF copy : {pdf_copy}")
+    print(f"  Source   : {source_copy}")
     print(f"  Markdown : {out_md}")
     print(f"  Images   : {count} extracted, {remaining} kept in {images_dir}/")
     if dedupe:
