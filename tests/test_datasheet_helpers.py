@@ -44,3 +44,9 @@ def test_sanitize_stem():
     assert sanitize_stem("  weird/name:v2 ") == "weird-name-v2"
     assert sanitize_stem("") == "document"
     assert sanitize_stem("///") == "document"
+
+
+def test_build_html_document_escapes_title():
+    doc = build_html_document("LM324 <Rev B> & C", "<p>x</p>")
+    assert "<title>LM324 &lt;Rev B&gt; &amp; C</title>" in doc
+    assert "<p>x</p>" in doc  # body stays raw

@@ -13,6 +13,7 @@ import sys
 import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
+from html import escape as _escape
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlsplit
@@ -33,10 +34,15 @@ _MIME = {
 }
 
 
+_SSL_CTX = None
+
+
 def _ssl_context() -> ssl.SSLContext:
-    if _CERTIFI:
-        return ssl.create_default_context(cafile=certifi.where())
-    return ssl.create_default_context()
+    global _SSL_CTX
+    if _SSL_CTX is None:
+        _SSL_CTX = (ssl.create_default_context(cafile=certifi.where())
+                    if _CERTIFI else ssl.create_default_context())
+    return _SSL_CTX
 
 
 def _request(url: str, timeout: int) -> Tuple[bytes, str]:
@@ -83,7 +89,10 @@ def parallel_fetch_text(urls: List[str], max_workers: int = 6,
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
         futs = {ex.submit(try_fetch_text, u, timeout): u for u in urls}
         for fut in concurrent.futures.as_completed(futs):
-            results[futs[fut]] = fut.result()
+            try:
+                results[futs[fut]] = fut.result()
+            except Exception:
+                results[futs[fut]] = None
     return results
 
 
@@ -108,7 +117,7 @@ def inline_images(html: str, base_url: str,
 
 def build_html_document(title: str, body_html: str) -> str:
     return ('<!DOCTYPE html><html><head><meta charset="utf-8">'
-            f"<title>{title}</title></head><body>{body_html}</body></html>")
+            f"<title>{_escape(title)}</title></head><body>{body_html}</body></html>")
 
 
 def sanitize_stem(text: str) -> str:
