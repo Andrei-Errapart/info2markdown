@@ -134,3 +134,66 @@ class DatasheetSource(ABC):
     @abstractmethod
     def fetch(self, url: str, work_dir: Path) -> Tuple[Path, str]:
         """Return (path-to-self-contained-html, output-stem)."""
+
+
+_TI_GUID_RE = re.compile(r"/document-viewer/[^/\"']+/datasheet/(GUID-[A-Fa-f0-9-]+)")
+_TI_PART_RE = re.compile(r"/document-viewer/(?:[a-z]{2}-[a-z]{2}/)?([^/]+)/datasheet", re.I)
+
+
+def parse_ti_litnum(html: str) -> Optional[str]:
+    m = re.search(r"litnum\s*=\s*'([^']+)'", html)
+    return m.group(1) if m else None
+
+
+def parse_ti_guids(html: str) -> List[str]:
+    out: List[str] = []
+    seen = set()
+    for g in _TI_GUID_RE.findall(html):
+        key = g.upper()
+        if key not in seen:
+            seen.add(key)
+            out.append(g)
+    return out
+
+
+def ti_part_from_url(url: str) -> str:
+    m = _TI_PART_RE.search(urlsplit(url).path)
+    return m.group(1).lower() if m else "datasheet"
+
+
+def extract_ti_fragment(fragment_html: str) -> str:
+    soup = BeautifulSoup(fragment_html, "html.parser")
+    div = soup.find("div", class_="subsection") or soup.find("div", class_="section")
+    return str(div) if div else ""
+
+
+class TIDocumentViewerSource(DatasheetSource):
+    name = "ti"
+
+    def matches(self, url: str) -> bool:
+        p = urlsplit(url)
+        return (p.netloc.lower().endswith("ti.com")
+                and re.search(r"/document-viewer/[^/]+.*?/datasheet", p.path, re.I) is not None)
+
+    def fetch(self, url: str, work_dir: Path) -> Tuple[Path, str]:
+        landing = fetch_text(url)
+        guids = parse_ti_guids(landing)
+        if not guids:
+            raise SystemExit(f"Error: no datasheet sections found at {url}")
+        part = ti_part_from_url(url)
+        base = url.split("?", 1)[0].rstrip("/")
+        section_urls = [f"{base}/{g}?raw=1" for g in guids]
+        fetched = parallel_fetch_text(section_urls)
+        bodies = []
+        for su in section_urls:
+            html = fetched.get(su)
+            if not html:
+                continue
+            frag = extract_ti_fragment(html)
+            if frag:
+                bodies.append(inline_images(frag, "https://www.ti.com/"))
+        if not bodies:
+            raise SystemExit(f"Error: no section content retrieved for {url}")
+        out = work_dir / f"{part}.html"
+        out.write_text(build_html_document(part, "\n".join(bodies)), encoding="utf-8")
+        return out, part
