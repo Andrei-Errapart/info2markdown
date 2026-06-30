@@ -18,9 +18,9 @@ onnxruntime>=1.16.0    # inference backend RapidOCR runs on
 # Raster -> vector tracing for diagrams.
 vtracer>=0.6.11
 
-# Image -> LaTeX OCR for equation images (ONNX, reuses onnxruntime). Used to
-# turn labelled "Equation N" raster formulas into inline LaTeX.
-rapid_latex_ocr>=0.0.9
+# Equation images (labelled "Equation N") are turned into inline LaTeX by
+# docling's CodeFormulaV2 model (the same one --enrich-formula uses for PDFs),
+# loaded via transformers/torch which docling already provides — no pin needed.
 
 # HTML parsing for datasheet vendor adapters.
 beautifulsoup4>=4.12.0

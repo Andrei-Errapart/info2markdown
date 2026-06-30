@@ -66,10 +66,12 @@ upstream source of truth if this logic needs updating.
   - **TABLE** (OpenCV grid-line detection) → reconstruct a Markdown table from
     OCR cell positions, inline it
   - **TEXT** (text-dominant, low color count) → inline the OCR'd text
-  - **EQUATION** (a `Equation N.` label just before the image ref) → LaTeX-OCR
-    (`rapid_latex_ocr`) → inline `$…$`. This is for *image* equations (TI HTML).
-    PDF equations are vector/text, handled by docling's `--enrich-formula` model
-    (emits `$$…$$`), not here.
+  - **EQUATION** (a `Equation N.` label just before the image ref) → inline
+    `$…$` via docling's **CodeFormulaV2** formula model (the same model
+    `--enrich-formula` uses for PDFs — loaded directly here for the HTML route's
+    *image* equations; far better on dense formulas than a plain LaTeX-OCR).
+    PDF equations are vector/text, handled by docling's `--enrich-formula`
+    (emits `$$…$$`) during conversion, not here.
   - **DIAGRAM** (high edge density / few colors) → trace to `.svg` via `vtracer`,
     but **only for clean, simple line art** (`DIAGRAM_MAX_TEXT_REGIONS`,
     `DIAGRAM_MAX_COLORS`): vtracer deforms complex images and renders text as
