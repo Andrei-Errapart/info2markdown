@@ -67,7 +67,12 @@ upstream source of truth if this logic needs updating.
     formatting at all, so PDF prose subscripts can't be recovered.)
   - A final `_normalize_math` pass tidies the per-token-spaced LaTeX the formula
     models emit (`R _ { B L k }` → `R_{BLk}`) inside `$…$`/`$$…$$` spans, keeping
-    meaningful spaces (`\, `, `\mu A`, `\max off`).
+    meaningful spaces (`\, `, `\mu A`, `\max off`). Then `_standardize_subscripts`
+    uses the equations as a dictionary of real variables and renders any *prose*
+    subscript that matches one in the same inline-LaTeX form (`R BLKlower` /
+    `R<sub>BLKlower</sub>` → `$R_{BLKlower}$`), so a variable looks identical in
+    its equation and in text. Non-equation subscripts stay `<sub>`/plain
+    (`SUBSCRIPT_MIN_SUB_LEN` gates short, false-positive-prone names).
 
 - **`scripts/image_postprocess.py`** — runs OCR (RapidOCR, **PP-OCRv5 multilingual**
   model covering English + Japanese) plus structural analysis on *every*

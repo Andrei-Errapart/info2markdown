@@ -381,6 +381,52 @@ def _normalize_math(md: str) -> str:
     return md
 
 
+# Subscripts shorter than this (single char: L_N, C_R) would false-match 2-letter
+# words/acronyms in prose, so they are not standardised. Tune here.
+SUBSCRIPT_MIN_SUB_LEN = 2
+# A $$...$$ / $...$ span, captured so re.split keeps it.
+_MATH_SPAN_RE = re.compile(r"(\$\$.+?\$\$|(?<!\$)\$(?!\$)[^$\n]+?\$(?!\$))", re.S)
+# X_{sub} with a plain alphanumeric subscript (skips V_{OUT(nom)}, t_{\max off}).
+_EQ_VAR_RE = re.compile(r"([A-Za-z])_\{([A-Za-z][A-Za-z0-9]*)\}")
+
+
+def _standardize_subscripts(md: str) -> str:
+    """Render text subscripts that match an equation variable in the same inline
+    LaTeX form as the equations (``$V_{comp}$``).
+
+    The equations are the dictionary of real math variables, so genuinely
+    non-math subscripts (units, ordinals) are left as ``<sub>`` / plain text.
+    Runs after ``_normalize_math``, when the equation LaTeX is clean ``X_{sub}``.
+    """
+    variables = {}                       # (base, sub) -> "$base_{sub}$"
+    for span in _MATH_SPAN_RE.findall(md):
+        for base, sub in _EQ_VAR_RE.findall(span):
+            if len(sub) >= SUBSCRIPT_MIN_SUB_LEN:
+                variables[(base, sub)] = f"${base}_{{{sub}}}$"
+    if not variables:
+        return md
+
+    # HTML form: a <sub> matching a known variable -> inline LaTeX; others kept.
+    md = re.sub(r"(\w)<sub>(\w+)</sub>",
+                lambda m: variables.get((m.group(1), m.group(2)), m.group(0)), md)
+
+    # PDF flat form ("VCR", "R BLKlower"): one left-to-right pass over the
+    # non-math segments only, longest variable first, so an inserted span is
+    # never re-scanned and table/code/math text is untouched.
+    concat = {b + s: latex for (b, s), latex in variables.items()}
+    alts = sorted(variables, key=lambda bs: -(len(bs[0]) + len(bs[1])))
+    flat_re = re.compile(
+        r"(?<![A-Za-z])(?:"
+        + "|".join(re.escape(b) + r"[ \t]?" + re.escape(s) for b, s in alts)
+        + r")(?![A-Za-z0-9])")
+    parts = _MATH_SPAN_RE.split(md)      # even idx = non-math text, odd = spans
+    for i in range(0, len(parts), 2):
+        parts[i] = flat_re.sub(
+            lambda m: concat.get(re.sub(r"\s+", "", m.group(0)), m.group(0)),
+            parts[i])
+    return "".join(parts)
+
+
 def convert(source: Path, output_dir: Path, ocr: bool, force: bool,
             postprocess: bool) -> Tuple[Path, Path, int, dict]:
     """Run the full PDF/HTML -> Markdown pipeline.
@@ -431,8 +477,11 @@ def convert(source: Path, output_dir: Path, ocr: bool, force: bool,
         stats["postprocess"] = image_postprocess.postprocess(out_md, images_dir.name)
 
     # Tidy the spaced LaTeX the formula models emit ($$...$$ from PDF
-    # --enrich-formula, $...$ from the HTML equation OCR).
-    out_md.write_text(_normalize_math(out_md.read_text(encoding="utf-8")), encoding="utf-8")
+    # --enrich-formula, $...$ from the HTML equation OCR), then standardise
+    # equation-variable subscripts in the prose to the same inline-LaTeX form.
+    md_text = _normalize_math(out_md.read_text(encoding="utf-8"))
+    md_text = _standardize_subscripts(md_text)
+    out_md.write_text(md_text, encoding="utf-8")
 
     return source_copy, out_md, count, stats
 
