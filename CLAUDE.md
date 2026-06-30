@@ -15,9 +15,15 @@ via a bash wrapper.
 ## Running
 
 ```bash
-scripts/pdf2markdown [-f|--force] [--no-ocr] [--no-postprocess] <input.pdf> <output_dir>
+scripts/pdf2markdown [-f|--force] [--no-ocr] [--no-postprocess] <input.pdf | URL> [output_dir]
 ```
 
+- The first argument may be a local PDF path **or** an `http(s)` URL. A URL is
+  downloaded to a temp file (validated to start with `%PDF`) and then run through
+  the same pipeline; the output stem is taken from the URL's last path segment
+  (query strings ignored, so `.../ucc256404.pdf?ts=123` → `ucc256404`). With no
+  `output_dir`, output goes to the PDF's directory (local input) or the current
+  directory (URL input). Quote URLs containing `?`/`&` so the shell doesn't mangle them.
 - First run provisions a virtualenv and **downloads PyTorch + OCR models** — slow
   and network-dependent. Subsequent runs are fast.
 - `--no-postprocess` skips the image analysis pass (keeps every image as PNG);

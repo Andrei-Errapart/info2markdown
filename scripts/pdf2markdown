@@ -6,7 +6,10 @@
 # environment with docling on first run, then runs the converter inside it.
 #
 # Usage:
-#   pdf2markdown [-f|--force] [--no-ocr] <input.pdf> <output_dir>
+#   pdf2markdown [-f|--force] [--no-ocr] [--no-postprocess] <input.pdf | URL> [output_dir]
+#
+# The first argument may be a local PDF path or an http(s) URL (downloaded
+# first). Quote URLs that contain '?' or '&' so the shell doesn't mangle them.
 #
 # The venv lives in the user's cache dir (not next to the script), so the
 # script directory can be read-only / installed system-wide.

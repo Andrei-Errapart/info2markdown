@@ -35,11 +35,21 @@ import base64
 import hashlib
 import re
 import shutil
+import ssl
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Dict, Tuple
+from urllib.parse import unquote, urlsplit
+
+try:
+    import certifi
+    _certifi = True
+except ImportError:
+    _certifi = False
 
 # Matches docling's embedded images: ![alt](data:image/<fmt>;base64,<data>)
 # (ported from /home/andrei/2026/mdoc/divide_png_md)
@@ -240,6 +250,46 @@ def deduplicate_images(md_path: Path, images_dirname: str) -> Dict[str, object]:
     return stats
 
 
+def is_url(value: str) -> bool:
+    """True if the argument is an http(s) URL rather than a local path."""
+    return urlsplit(value).scheme in ("http", "https")
+
+
+def _url_stem(url: str) -> str:
+    """Derive a clean filename stem from a URL's path (query string ignored)."""
+    name = Path(unquote(urlsplit(url).path)).name
+    stem = re.sub(r"[^A-Za-z0-9._-]", "_", Path(name).stem).strip("._")
+    return stem or "document"
+
+
+def download_pdf(url: str, dest_dir: Path) -> Path:
+    """Download a PDF from `url` into `dest_dir`, returning the local path.
+
+    Names the file `<url-stem>.pdf` so the rest of the pipeline (which keys off
+    pdf.stem) behaves exactly as for a local file. Sets a browser-like
+    User-Agent (many vendor sites 403 the default urllib agent) and validates
+    the payload really is a PDF.
+    """
+    dest = dest_dir / f"{_url_stem(url)}.pdf"
+    req = urllib.request.Request(
+        url, headers={"User-Agent": "Mozilla/5.0 (compatible; pdf2markdown)"}
+    )
+    ctx = (ssl.create_default_context(cafile=certifi.where()) if _certifi
+           else ssl.create_default_context())
+    print(f"Downloading {url} ...", flush=True)
+    try:
+        with urllib.request.urlopen(req, timeout=60, context=ctx) as resp, \
+                open(dest, "wb") as fh:
+            shutil.copyfileobj(resp, fh)
+    except urllib.error.URLError as exc:
+        raise SystemExit(f"Error: failed to download {url}: {exc.reason}")
+    # A redirect to an HTML error/login page is the common failure mode.
+    with open(dest, "rb") as fh:
+        if not fh.read(5).startswith(b"%PDF"):
+            raise SystemExit(f"Error: downloaded content from {url} is not a PDF")
+    return dest
+
+
 def convert(pdf: Path, output_dir: Path, ocr: bool, force: bool,
             postprocess: bool) -> Tuple[Path, Path, int, dict]:
     """Run the full PDF -> Markdown pipeline.
@@ -297,7 +347,8 @@ def main() -> int:
         description="Convert a PDF to clean Markdown with external image files.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("pdf", type=Path, metavar="input.pdf", help="Input PDF file")
+    parser.add_argument("pdf", type=str, metavar="input.pdf | URL",
+                        help="Input PDF file or http(s) URL")
     parser.add_argument("output_dir", type=Path, metavar="output_dir", nargs="?",
                         help="Directory for the PDF copy, images, and .md output (default: PDF's directory)")
     parser.add_argument("-f", "--force", action="store_true",
@@ -308,11 +359,24 @@ def main() -> int:
                         help="Skip the image post-processing pass (keep all images as PNG)")
     args = parser.parse_args()
 
-    output_dir = args.output_dir if args.output_dir is not None else args.pdf.resolve().parent
-    pdf_copy, out_md, count, stats = convert(
-        args.pdf.resolve(), output_dir, ocr=args.ocr, force=args.force,
-        postprocess=args.postprocess,
-    )
+    download_dir = None
+    if is_url(args.pdf):
+        download_dir = Path(tempfile.mkdtemp(prefix="pdf2markdown_dl_"))
+        pdf_path = download_pdf(args.pdf, download_dir)
+        default_output = Path.cwd()
+    else:
+        pdf_path = Path(args.pdf).resolve()
+        default_output = pdf_path.parent
+
+    try:
+        output_dir = args.output_dir if args.output_dir is not None else default_output
+        pdf_copy, out_md, count, stats = convert(
+            pdf_path, output_dir, ocr=args.ocr, force=args.force,
+            postprocess=args.postprocess,
+        )
+    finally:
+        if download_dir is not None:
+            shutil.rmtree(download_dir, ignore_errors=True)
     pp = stats.get("postprocess", {})
     dedupe = stats.get("dedupe", {})
 
