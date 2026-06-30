@@ -328,6 +328,39 @@ def download_pdf(url: str, dest_dir: Path) -> Path:
     return dest
 
 
+_LATEX_TOKEN_RE = re.compile(r"\\[A-Za-z]+|\\.|\s+|[^\\\s]")
+_LATEX_WORD_RE = re.compile(r"\\[A-Za-z]+")
+
+
+def _normalize_latex(latex: str) -> str:
+    """Collapse the per-token spaces docling's formula models emit
+    (``R _ { B L k } = 1 5`` -> ``R_{BLk}=15``) while keeping the space that
+    terminates a ``\\word`` command before a letter, so ``\\mu A``,
+    ``\\max off`` and ``\\,`` survive intact."""
+    toks = _LATEX_TOKEN_RE.findall(latex)
+    out: list = []
+    for j, tok in enumerate(toks):
+        if tok.isspace():
+            prev = out[-1] if out else ""
+            nxt = toks[j + 1] if j + 1 < len(toks) else ""
+            if _LATEX_WORD_RE.fullmatch(prev) and nxt[:1].isalpha():
+                out.append(" ")
+        else:
+            out.append(tok)
+    return "".join(out)
+
+
+def _normalize_math(md: str) -> str:
+    """Normalise the LaTeX inside every ``$$...$$`` and ``$...$`` span (only
+    spans that look like math, to leave a stray ``$`` in prose alone)."""
+    def norm(inner: str) -> str:
+        return _normalize_latex(inner) if re.search(r"[\\_^{}]", inner) else inner
+    md = re.sub(r"\$\$(.+?)\$\$", lambda m: f"$${norm(m.group(1))}$$", md, flags=re.S)
+    md = re.sub(r"(?<!\$)\$(?!\$)([^$\n]+?)\$(?!\$)",
+                lambda m: f"${norm(m.group(1))}$", md)
+    return md
+
+
 def convert(source: Path, output_dir: Path, ocr: bool, force: bool,
             postprocess: bool) -> Tuple[Path, Path, int, dict]:
     """Run the full PDF/HTML -> Markdown pipeline.
@@ -376,6 +409,10 @@ def convert(source: Path, output_dir: Path, ocr: bool, force: bool,
         import image_postprocess
         print("Post-processing images (OCR + table/text/vector detection)...", flush=True)
         stats["postprocess"] = image_postprocess.postprocess(out_md, images_dir.name)
+
+    # Tidy the spaced LaTeX the formula models emit ($$...$$ from PDF
+    # --enrich-formula, $...$ from the HTML equation OCR).
+    out_md.write_text(_normalize_math(out_md.read_text(encoding="utf-8")), encoding="utf-8")
 
     return source_copy, out_md, count, stats
 
