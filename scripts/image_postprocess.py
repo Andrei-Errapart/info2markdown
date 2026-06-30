@@ -45,6 +45,22 @@ TEXT_MAX_COLOR_UNIQUENESS = 0.05  # mostly few colors (ink on a plain ground)
 DIAGRAM_SCORE_MIN = 0.5      # ImageClassifier diagram score above this -> vectorize
 DIAGRAM_PHASH_THRESHOLD = 8  # max Hamming distance (out of 64 bits) to consider near-duplicate
 
+# An image is treated as an EQUATION (LaTeX-OCR'd, not vectorised/OCR'd-as-text)
+# when the Markdown labels it as one just before the ref, e.g. a standalone
+# "Equation 12." paragraph (TI HTML datasheets). A cross-reference *link* like
+# "[Equation 80](...)" is excluded via the (?<!\[) guard. The optional middle
+# line absorbs the image-name paragraph docling emits ("GUID-...-low.gif").
+EQUATION_LABEL_RE = re.compile(
+    r'(?<!\[)\b(?:Equation|Eqn|Eq\.)\s*\(?\d+\)?[.:]?[ \t]*\r?\n+'
+    r'(?:[ \t]*[^\n\[\]]{0,80}\r?\n+)?'   # optional short line (e.g. the GUID image-name)
+    r'\Z', re.IGNORECASE)
+EQUATION_LOOKBACK = 200      # chars of preceding Markdown to scan for the label
+
+# Standalone "GUID-<hex>-low.gif" (or .png/.jpg) text paragraph docling emits as
+# an image's name — noise once the image itself is inlined/linked; dropped.
+GUID_TEXT_LINE_RE = re.compile(
+    r'(?m)^[ \t]*GUID-[0-9A-Fa-f-]+(?:-low)?\.(?:gif|png|jpe?g|svg)[ \t]*$\n?')
+
 # vtracer parameters (from mdoc PngToSvgConverter.convert defaults)
 VTRACER_PARAMS = dict(
     colormode="color", hierarchical="stacked", mode="spline",
@@ -59,6 +75,7 @@ IMG_REF_RE = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
 class ImageType(Enum):
     TABLE = "table"
     TEXT = "text"
+    EQUATION = "equation"
     DIAGRAM = "diagram"
     PHOTO = "photo"
     UNKNOWN = "unknown"
@@ -110,6 +127,44 @@ class Ocr:
                 "confidence": float(score),
             })
         return out
+
+
+class LatexOcr:
+    """Thin rapid_latex_ocr wrapper: render an equation image to a LaTeX string.
+
+    ONNX-based (reuses onnxruntime, same family as RapidOCR); models download on
+    first use. Lazily constructed so the model is only loaded when a datasheet
+    actually contains labelled equations.
+    """
+
+    def __init__(self) -> None:
+        from rapid_latex_ocr import LaTeXOCR
+        self._engine = LaTeXOCR()
+
+    def to_latex(self, image_path: Path) -> Optional[str]:
+        try:
+            with open(image_path, "rb") as fh:
+                latex, _elapsed = self._engine(fh.read())
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("LaTeX-OCR failed for %s: %s", image_path.name, exc)
+            return None
+        latex = (latex or "").strip()
+        return latex or None
+
+
+def preceded_by_equation_label(text_before: str) -> bool:
+    """True if `text_before` ends with a standalone "Equation N." label."""
+    return EQUATION_LABEL_RE.search(text_before) is not None
+
+
+def wrap_latex(latex: str) -> str:
+    """Wrap a LaTeX string as Markdown math.
+
+    Multi-line / environment LaTeX -> display block; otherwise inline `$…$`.
+    """
+    if "\\\\" in latex or "\\begin" in latex or "\n" in latex:
+        return f"\n$$\n{latex}\n$$\n"
+    return f"${latex}$"
 
 
 # ---------------------------------------------------------------------------
@@ -329,7 +384,9 @@ def postprocess(md_path: Path, images_dirname: str) -> Dict[str, int]:
     prefix = f"{images_dirname}/"
 
     ocr: Optional[Ocr] = None
+    latex_ocr: Optional[LatexOcr] = None
     decisions: Dict[str, Tuple[ImageType, object]] = {}  # ref-target -> (type, payload)
+    equations: Dict[str, Optional[str]] = {}  # ref-target -> LaTeX (None if OCR failed)
     counts = {t.value: 0 for t in ImageType}
     counts["visual_dedupe_refs"] = 0
     counts["visual_dedupe_files"] = 0
@@ -350,11 +407,36 @@ def postprocess(md_path: Path, images_dirname: str) -> Dict[str, int]:
         decisions[target] = result
         return result
 
+    def equation_latex(target: str) -> Optional[str]:
+        """LaTeX for an equation-labelled image (cached); None if unreadable."""
+        nonlocal latex_ocr
+        if target in equations:
+            return equations[target]
+        img_path = md_path.parent / target
+        if not img_path.is_file():
+            equations[target] = None
+            return None
+        if latex_ocr is None:
+            latex_ocr = LatexOcr()
+        latex = latex_ocr.to_latex(img_path)
+        equations[target] = latex
+        return latex
+
     def replace(match: "re.Match[str]") -> str:
         alt, target = match.group(1), match.group(2).strip()
         # Only touch images that live in our extracted-images directory.
         if not target.startswith(prefix):
             return match.group(0)
+
+        # Equation? A standalone "Equation N." label just before the ref
+        # (TI HTML datasheets) is a high-precision signal — LaTeX-OCR it.
+        before = match.string[max(0, match.start() - EQUATION_LOOKBACK):match.start()]
+        if preceded_by_equation_label(before):
+            latex = equation_latex(target)
+            if latex:
+                counts[ImageType.EQUATION.value] += 1
+                return wrap_latex(latex)
+            # LaTeX-OCR failed → fall through, handle as an ordinary image.
 
         kind, payload = decide(target)
         if kind in (ImageType.TABLE, ImageType.TEXT):
@@ -391,6 +473,8 @@ def postprocess(md_path: Path, images_dirname: str) -> Dict[str, int]:
         return match.group(0)  # PHOTO / UNKNOWN: leave as-is
 
     new_content = IMG_REF_RE.sub(replace, content)
+    # Drop the standalone "GUID-...-low.gif" image-name paragraphs docling emits.
+    new_content = GUID_TEXT_LINE_RE.sub("", new_content)
     md_path.write_text(new_content, encoding="utf-8")
 
     # Remove image files no longer referenced by the rewritten Markdown.
@@ -412,4 +496,5 @@ def postprocess(md_path: Path, images_dirname: str) -> Dict[str, int]:
     return counts
 
 
-__all__ = ["postprocess", "ImageType", "diagram_phash", "_hamming", "DIAGRAM_PHASH_THRESHOLD"]
+__all__ = ["postprocess", "ImageType", "diagram_phash", "_hamming", "DIAGRAM_PHASH_THRESHOLD",
+           "LatexOcr", "preceded_by_equation_label", "wrap_latex", "EQUATION_LABEL_RE"]
