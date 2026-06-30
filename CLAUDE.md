@@ -24,6 +24,12 @@ scripts/pdf2markdown [-f|--force] [--no-ocr] [--no-postprocess] <input.pdf | URL
   (query strings ignored, so `.../ucc256404.pdf?ts=123` → `ucc256404`). With no
   `output_dir`, output goes to the PDF's directory (local input) or the current
   directory (URL input). Quote URLs containing `?`/`&` so the shell doesn't mangle them.
+- A first argument that is a **vendor HTML-datasheet URL** is fetched and
+  consolidated into one self-contained HTML, then converted by the same docling
+  pipeline. Supported vendors: **TI** (`www.ti.com/document-viewer/<part>/datasheet`)
+  and **Microchip** (`onlinedocs.microchip.com/g/GUID-…` or `/oxy/…`). New vendors
+  are added by implementing `DatasheetSource` in `scripts/datasheet_sources.py`
+  and registering it in `SOURCES`.
 - First run provisions a virtualenv and **downloads PyTorch + OCR models** — slow
   and network-dependent. Subsequent runs are fast.
 - `--no-postprocess` skips the image analysis pass (keeps every image as PNG);
@@ -64,6 +70,14 @@ upstream source of truth if this logic needs updating.
 
   Images replaced by inline text/table or by an SVG are deleted as orphans, so
   the images dir only keeps what's still referenced.
+
+- **`scripts/datasheet_sources.py`** — vendor-pluggable HTML datasheet fetchers.
+  Defines the `DatasheetSource` interface; two adapters (`TIDocumentViewerSource`
+  for TI datasheets, `MicrochipOnlineDocsSource` for Microchip onlinedocs) fetch
+  vendor GUID-based HTML pages, inline all images as base64 data-URIs, and produce
+  one self-contained `.html` file. This HTML is then fed to docling in
+  `pdf2markdown.py`, converging HTML datasheets and PDFs into a single pipeline.
+  New vendors are registered in `SOURCES`.
 
 ## Conventions / gotchas
 

@@ -8,8 +8,9 @@
 # Usage:
 #   pdf2markdown [-f|--force] [--no-ocr] [--no-postprocess] <input.pdf | URL> [output_dir]
 #
-# The first argument may be a local PDF path or an http(s) URL (downloaded
-# first). Quote URLs that contain '?' or '&' so the shell doesn't mangle them.
+# The first argument may be a local PDF path, an http(s) URL (downloaded first),
+# or a vendor HTML-datasheet URL (TI document-viewer or Microchip onlinedocs).
+# Quote URLs that contain '?' or '&' so the shell doesn't mangle them.
 #
 # The venv lives in the user's cache dir (not next to the script), so the
 # script directory can be read-only / installed system-wide.
