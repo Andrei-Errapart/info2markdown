@@ -17,3 +17,6 @@ onnxruntime>=1.16.0    # inference backend RapidOCR runs on
 
 # Raster -> vector tracing for diagrams.
 vtracer>=0.6.11
+
+# HTML parsing for datasheet vendor adapters.
+beautifulsoup4>=4.12.0

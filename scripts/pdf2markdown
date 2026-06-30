@@ -29,7 +29,7 @@ PYTHON="${PYTHON:-python3}"
 # This also picks up newly added requirements for an already-created venv.
 needs_setup=1
 if [ -x "$VENV/bin/docling" ] && \
-   "$VENV/bin/python" -c 'import cv2, numpy, scipy, PIL, rapidocr, onnxruntime, vtracer' 2>/dev/null; then
+   "$VENV/bin/python" -c 'import cv2, numpy, scipy, PIL, rapidocr, onnxruntime, vtracer, bs4' 2>/dev/null; then
     needs_setup=0
 fi
 
