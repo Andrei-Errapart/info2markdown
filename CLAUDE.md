@@ -59,6 +59,15 @@ upstream source of truth if this logic needs updating.
   exact duplicate images are canonicalized to SHA-256 filenames → hand off to
   post-processing. The intermediate base64 markdown is discarded; it never lands
   in the output dir.
+  - The HTML route (`run_docling_html`) uses the docling **Python API** (not the
+    CLI) so it can (a) set `fetch_images=True` and (b) plug in a custom Markdown
+    serializer that emits `<sub>`/`<sup>` — docling's HTML backend captures
+    `<sub>`/`<sup>` formatting but the default serializer drops it, flattening
+    prose like `V_comp` to `V comp`. (The PDF backend doesn't capture script
+    formatting at all, so PDF prose subscripts can't be recovered.)
+  - A final `_normalize_math` pass tidies the per-token-spaced LaTeX the formula
+    models emit (`R _ { B L k }` → `R_{BLk}`) inside `$…$`/`$$…$$` spans, keeping
+    meaningful spaces (`\, `, `\mu A`, `\max off`).
 
 - **`scripts/image_postprocess.py`** — runs OCR (RapidOCR, **PP-OCRv5 multilingual**
   model covering English + Japanese) plus structural analysis on *every*

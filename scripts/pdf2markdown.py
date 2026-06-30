@@ -99,11 +99,25 @@ def run_docling_html(source: Path, out_dir: Path) -> Path:
     available" placeholders. Calling the API with ``fetch_images=True`` makes
     docling decode the data-URIs and re-embed them as base64 in the Markdown,
     which ``split_images()`` then extracts — identical to the PDF route.
+
+    A custom serializer also emits ``<sub>``/``<sup>`` for the subscript /
+    superscript formatting docling's HTML backend captures from ``<sub>``/
+    ``<sup>`` tags — the default Markdown serializer drops it, flattening prose
+    like ``V_comp`` to ``V comp``.
     """
     from docling.document_converter import DocumentConverter, HTMLFormatOption
     from docling.datamodel.base_models import InputFormat
     from docling.datamodel.backend_options import HTMLBackendOptions
     from docling_core.types.doc import ImageRefMode
+    from docling_core.transforms.serializer.markdown import (
+        MarkdownDocSerializer, MarkdownParams)
+
+    class _SubSupSerializer(MarkdownDocSerializer):
+        def serialize_subscript(self, text: str, **kwargs) -> str:
+            return f"<sub>{text}</sub>"
+
+        def serialize_superscript(self, text: str, **kwargs) -> str:
+            return f"<sup>{text}</sup>"
 
     print(f"Converting {source.name} with docling (HTML, images enabled)...",
           flush=True)
@@ -113,7 +127,13 @@ def run_docling_html(source: Path, out_dir: Path) -> Path:
         )
     })
     result = converter.convert(str(source))
-    md_text = result.document.export_to_markdown(image_mode=ImageRefMode.EMBEDDED)
+    md_text = _SubSupSerializer(
+        doc=result.document,
+        params=MarkdownParams(image_mode=ImageRefMode.EMBEDDED),
+    ).serialize().text
+    # docling leaves a space between a variable and its subscript run
+    # ("R <sub>FB</sub>"); tighten it to "R<sub>FB</sub>".
+    md_text = re.sub(r"(\w)[ \t]+(<su[bp]>)", r"\1\2", md_text)
     out_md = out_dir / f"{source.stem}.md"
     out_md.write_text(md_text, encoding="utf-8")
     return out_md
