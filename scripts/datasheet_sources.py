@@ -269,3 +269,13 @@ class MicrochipOnlineDocsSource(DatasheetSource):
         out = work_dir / f"{stem}.html"
         out.write_text(build_html_document(stem, "\n".join(bodies)), encoding="utf-8")
         return out, stem
+
+
+SOURCES: List[DatasheetSource] = [
+    TIDocumentViewerSource(),
+    MicrochipOnlineDocsSource(),
+]
+
+
+def find_source(url: str) -> Optional[DatasheetSource]:
+    return next((s for s in SOURCES if s.matches(url)), None)
