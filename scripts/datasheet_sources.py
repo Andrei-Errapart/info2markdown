@@ -209,9 +209,10 @@ _GUID_RE = re.compile(
 
 def parse_oxy_toc(index_html: str) -> List[str]:
     soup = BeautifulSoup(index_html, "html.parser")
+    container = soup.find("nav", id="wh_publication_toc") or soup
     out: List[str] = []
     seen = set()
-    for a in soup.find_all("a", href=True):
+    for a in container.find_all("a", href=True):
         href = a["href"]
         if _OXY_TOPIC_RE.match(href) and href not in seen:
             seen.add(href)

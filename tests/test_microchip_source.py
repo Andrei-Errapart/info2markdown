@@ -31,6 +31,20 @@ def test_parse_oxy_toc_ordered_deduped_filtered():
     assert parse_oxy_toc(INDEX) == ["GUID-111.html", "GUID-222.html"]
 
 
+def test_parse_oxy_toc_ignores_links_outside_toc_nav():
+    html = """
+    <html><body>
+    <div class="wh_breadcrumb"><a href="GUID-999.html">crumb</a></div>
+    <nav id="wh_publication_toc"><ul>
+      <li><a href="GUID-111.html">Intro</a></li>
+      <li><a href="GUID-222.html">Overview</a></li>
+    </ul></nav>
+    <a href="GUID-888.html">next-button</a>
+    </body></html>
+    """
+    assert parse_oxy_toc(html) == ["GUID-111.html", "GUID-222.html"]
+
+
 def test_extract_oxy_topic_returns_article_only():
     out = extract_oxy_topic(TOPIC)
     assert out.startswith("<article")
