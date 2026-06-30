@@ -54,7 +54,7 @@ def _request(url: str, timeout: int) -> Tuple[bytes, str]:
 def fetch_bytes(url: str, timeout: int = 60) -> bytes:
     try:
         return _request(url, timeout)[0]
-    except urllib.error.URLError as exc:
+    except (OSError, ValueError) as exc:
         raise SystemExit(f"Error: failed to fetch {url}: {getattr(exc, 'reason', exc)}")
 
 
@@ -65,7 +65,7 @@ def fetch_text(url: str, timeout: int = 60) -> str:
 def fetch_text_and_url(url: str, timeout: int = 60) -> Tuple[str, str]:
     try:
         raw, final = _request(url, timeout)
-    except urllib.error.URLError as exc:
+    except (OSError, ValueError) as exc:
         raise SystemExit(f"Error: failed to fetch {url}: {getattr(exc, 'reason', exc)}")
     return raw.decode("utf-8", errors="replace"), final
 
@@ -73,7 +73,7 @@ def fetch_text_and_url(url: str, timeout: int = 60) -> Tuple[str, str]:
 def try_fetch_bytes(url: str, timeout: int = 30) -> Optional[bytes]:
     try:
         return _request(url, timeout)[0]
-    except (urllib.error.URLError, ValueError):
+    except (OSError, ValueError):
         print(f"Warning: failed to fetch {url}", file=sys.stderr)
         return None
 

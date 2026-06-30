@@ -47,3 +47,23 @@ def test_ti_matches():
     assert s.matches("https://www.ti.com/document-viewer/UCC256404/datasheet?x=1")
     assert not s.matches("https://www.ti.com/lit/ds/symlink/ucc256404.pdf")
     assert not s.matches("https://onlinedocs.microchip.com/g/GUID-1")
+
+
+def test_ti_fetch_builds_section_urls_and_concatenates(monkeypatch, tmp_path):
+    import datasheet_sources as ds
+    monkeypatch.setattr(ds, "fetch_text", lambda url, *a, **k: LANDING)
+    captured = {}
+
+    def fake_parallel(urls, *a, **k):
+        captured["urls"] = list(urls)
+        return {u: '<div class="subsection"><h1>S</h1><p>body</p></div>' for u in urls}
+
+    monkeypatch.setattr(ds, "parallel_fetch_text", fake_parallel)
+    out, stem = ds.TIDocumentViewerSource().fetch(
+        "https://www.ti.com/document-viewer/UCC256404/datasheet", tmp_path)
+    assert stem == "ucc256404"
+    assert captured["urls"] == [
+        "https://www.ti.com/document-viewer/UCC256404/datasheet/GUID-AAA1?raw=1",
+        "https://www.ti.com/document-viewer/UCC256404/datasheet/GUID-BBB2?raw=1",
+    ]
+    assert out.read_text(encoding="utf-8").count('<div class="subsection"') == 2

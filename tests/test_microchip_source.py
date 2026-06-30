@@ -71,3 +71,25 @@ def test_microchip_matches():
     assert s.matches("https://onlinedocs.microchip.com/oxy/GUID-1-en-US-25/index.html")
     assert not s.matches("https://www.ti.com/document-viewer/ucc256404/datasheet")
     assert not s.matches("https://ww1.microchip.com/downloads/x.pdf")
+
+
+def test_microchip_fetch_builds_topic_urls_and_concatenates(monkeypatch, tmp_path):
+    import datasheet_sources as ds
+    monkeypatch.setattr(
+        ds, "fetch_text_and_url",
+        lambda url, *a, **k: (INDEX, "https://onlinedocs.microchip.com/oxy/GUID-ROOT-en-US-25/index.html"))
+    captured = {}
+
+    def fake_parallel(urls, *a, **k):
+        captured["urls"] = list(urls)
+        return {u: '<article role="article"><h1>T</h1><p>x</p></article>' for u in urls}
+
+    monkeypatch.setattr(ds, "parallel_fetch_text", fake_parallel)
+    out, stem = ds.MicrochipOnlineDocsSource().fetch(
+        "https://onlinedocs.microchip.com/g/GUID-ROOT", tmp_path)
+    assert stem == "AVR-DA-Family"
+    assert captured["urls"] == [
+        "https://onlinedocs.microchip.com/oxy/GUID-ROOT-en-US-25/GUID-111.html",
+        "https://onlinedocs.microchip.com/oxy/GUID-ROOT-en-US-25/GUID-222.html",
+    ]
+    assert out.read_text(encoding="utf-8").count("<article") == 2

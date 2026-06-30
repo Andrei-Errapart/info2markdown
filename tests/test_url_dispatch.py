@@ -1,13 +1,6 @@
 import pdf2markdown as p
 
 
-def test_looks_like_pdf():
-    assert p._looks_like_pdf("https://www.ti.com/lit/ds/symlink/ucc256404.pdf?ts=1")
-    assert p._looks_like_pdf("https://x/a.PDF")
-    assert not p._looks_like_pdf("https://onlinedocs.microchip.com/g/GUID-1")
-    assert not p._looks_like_pdf("https://www.ti.com/document-viewer/ucc256404/datasheet")
-
-
 def test_main_routes_datasheet_url_through_source(monkeypatch, tmp_path):
     calls = {}
 
@@ -37,11 +30,26 @@ def test_main_routes_datasheet_url_through_source(monkeypatch, tmp_path):
     assert calls["output_dir"] == tmp_path  # URL default output = cwd
 
 
-def test_main_unsupported_url_errors(monkeypatch):
+def test_main_routes_non_datasheet_url_to_download_pdf(monkeypatch, tmp_path):
+    calls = {}
     monkeypatch.setattr(p, "find_source", lambda url: None)
-    monkeypatch.setattr(p.sys, "argv", ["pdf2markdown", "https://example.com/page.html"])
-    try:
-        p.main()
-        assert False, "expected SystemExit"
-    except SystemExit as e:
-        assert "unsupported URL" in str(e)
+
+    def fake_download_pdf(url, work_dir):
+        calls["url"] = url
+        f = work_dir / "doc.pdf"
+        f.write_text("%PDF-1.4", encoding="utf-8")
+        return f
+
+    monkeypatch.setattr(p, "download_pdf", fake_download_pdf)
+
+    def fake_convert(source, output_dir, ocr, force, postprocess):
+        calls["suffix"] = source.suffix
+        return source, output_dir / "doc.md", 0, {}
+
+    monkeypatch.setattr(p, "convert", fake_convert)
+    monkeypatch.setattr(p.sys, "argv", ["pdf2markdown", "https://example.com/download?id=123"])
+    monkeypatch.chdir(tmp_path)
+
+    assert p.main() == 0
+    assert calls["url"] == "https://example.com/download?id=123"
+    assert calls["suffix"] == ".pdf"

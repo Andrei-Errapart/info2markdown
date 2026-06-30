@@ -42,7 +42,7 @@ import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 from urllib.parse import unquote, urlsplit
 
 from datasheet_sources import find_source
@@ -185,7 +185,7 @@ def deduplicate_images(md_path: Path, images_dirname: str) -> Dict[str, object]:
     canonical_by_original: Dict[str, str] = {}
     duplicate_groups: Dict[str, list] = {}
 
-    def resolve_target(target: str) -> Tuple[str, Path] | None:
+    def resolve_target(target: str) -> Optional[Tuple[str, Path]]:
         stripped = target.strip()
         if not stripped.startswith(prefix):
             return None
@@ -258,10 +258,6 @@ def deduplicate_images(md_path: Path, images_dirname: str) -> Dict[str, object]:
 def is_url(value: str) -> bool:
     """True if the argument is an http(s) URL rather than a local path."""
     return urlsplit(value).scheme in ("http", "https")
-
-
-def _looks_like_pdf(url: str) -> bool:
-    return Path(urlsplit(url).path).suffix.lower() == ".pdf"
 
 
 def _url_stem(url: str) -> str:
@@ -371,23 +367,20 @@ def main() -> int:
 
     download_dir = None
     if is_url(args.pdf):
-        download_dir = Path(tempfile.mkdtemp(prefix="pdf2markdown_dl_"))
-        source = find_source(args.pdf)
-        if source is not None:
-            print(f"Fetching {source.name} HTML datasheet ...", flush=True)
-            input_path, _ = source.fetch(args.pdf, download_dir)
-        elif _looks_like_pdf(args.pdf):
-            input_path = download_pdf(args.pdf, download_dir)
-        else:
-            raise SystemExit(
-                f"Error: unsupported URL (no datasheet source matched, and not a "
-                f".pdf): {args.pdf}")
         default_output = Path.cwd()
     else:
         input_path = Path(args.pdf).resolve()
         default_output = input_path.parent
 
     try:
+        if is_url(args.pdf):
+            download_dir = Path(tempfile.mkdtemp(prefix="pdf2markdown_dl_"))
+            source = find_source(args.pdf)
+            if source is not None:
+                print(f"Fetching {source.name} HTML datasheet ...", flush=True)
+                input_path, _ = source.fetch(args.pdf, download_dir)
+            else:
+                input_path = download_pdf(args.pdf, download_dir)
         output_dir = args.output_dir if args.output_dir is not None else default_output
         source_copy, out_md, count, stats = convert(
             input_path, output_dir, ocr=args.ocr, force=args.force,
