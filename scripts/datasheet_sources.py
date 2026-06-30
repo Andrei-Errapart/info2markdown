@@ -188,10 +188,13 @@ class TIDocumentViewerSource(DatasheetSource):
         for su in section_urls:
             html = fetched.get(su)
             if not html:
+                print(f"Warning: failed to fetch {su}", file=sys.stderr)
                 continue
             frag = extract_ti_fragment(html)
-            if frag:
-                bodies.append(inline_images(frag, "https://www.ti.com/"))
+            if not frag:
+                print(f"Warning: no subsection content in {su}", file=sys.stderr)
+                continue
+            bodies.append(inline_images(frag, "https://www.ti.com/"))
         if not bodies:
             raise SystemExit(f"Error: no section content retrieved for {url}")
         out = work_dir / f"{part}.html"
