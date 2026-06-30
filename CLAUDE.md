@@ -79,6 +79,12 @@ upstream source of truth if this logic needs updating.
   one self-contained `.html` file. This HTML is then fed to docling in
   `pdf2markdown.py`, converging HTML datasheets and PDFs into a single pipeline.
   New vendors are registered in `SOURCES`.
+  - **gotcha:** the HTML path uses docling's **Python API** (`run_docling_html`),
+    not the CLI, because the CLI doesn't expose the HTML backend's
+    `fetch_images` option — without it docling drops every `<img>` and emits
+    "Image not available" placeholders. The API sets
+    `HTMLBackendOptions(fetch_images=True)` so the inlined data-URI images are
+    re-embedded as base64 and `split_images()` extracts them like the PDF route.
 
 ## Conventions / gotchas
 

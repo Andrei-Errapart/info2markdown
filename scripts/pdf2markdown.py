@@ -88,8 +88,38 @@ def build_docling_cmd(docling: str, source: Path, out_dir: Path, ocr: bool) -> l
     return cmd
 
 
+def run_docling_html(source: Path, out_dir: Path) -> Path:
+    """Convert an HTML source via docling's Python API with image fetching on.
+
+    The docling CLI does not expose the HTML backend's ``fetch_images`` option,
+    so inlined ``<img>`` data-URIs are dropped and replaced by "Image not
+    available" placeholders. Calling the API with ``fetch_images=True`` makes
+    docling decode the data-URIs and re-embed them as base64 in the Markdown,
+    which ``split_images()`` then extracts — identical to the PDF route.
+    """
+    from docling.document_converter import DocumentConverter, HTMLFormatOption
+    from docling.datamodel.base_models import InputFormat
+    from docling.datamodel.backend_options import HTMLBackendOptions
+    from docling_core.types.doc import ImageRefMode
+
+    print(f"Converting {source.name} with docling (HTML, images enabled)...",
+          flush=True)
+    converter = DocumentConverter(format_options={
+        InputFormat.HTML: HTMLFormatOption(
+            backend_options=HTMLBackendOptions(fetch_images=True)
+        )
+    })
+    result = converter.convert(str(source))
+    md_text = result.document.export_to_markdown(image_mode=ImageRefMode.EMBEDDED)
+    out_md = out_dir / f"{source.stem}.md"
+    out_md.write_text(md_text, encoding="utf-8")
+    return out_md
+
+
 def run_docling(docling: str, source: Path, out_dir: Path, ocr: bool) -> Path:
     """Run docling embedded-image conversion; return the produced .md file."""
+    if source.suffix.lower() == ".html":
+        return run_docling_html(source, out_dir)
     cmd = build_docling_cmd(docling, source, out_dir, ocr)
     print(f"Converting {source.name} with docling...", flush=True)
     subprocess.run(cmd, check=True)
