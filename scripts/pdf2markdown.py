@@ -75,21 +75,24 @@ def find_docling() -> str:
     )
 
 
-def run_docling(docling: str, pdf: Path, out_dir: Path, ocr: bool) -> Path:
-    """Run docling embedded-image conversion; return the produced .md file."""
-    cmd = [
-        docling, str(pdf),
-        "--to", "md",
-        "--image-export-mode", "embedded",
-    ]
-    if ocr:
-        cmd.append("--ocr")
-    cmd += ["--tables", "--table-mode", "accurate", "--output", str(out_dir)]
+def build_docling_cmd(docling: str, source: Path, out_dir: Path, ocr: bool) -> list:
+    """Build the docling CLI argv for a .pdf or .html source."""
+    cmd = [docling, str(source), "--to", "md", "--image-export-mode", "embedded"]
+    if source.suffix.lower() == ".pdf":
+        if ocr:
+            cmd.append("--ocr")
+        cmd += ["--tables", "--table-mode", "accurate"]
+    cmd += ["--output", str(out_dir)]
+    return cmd
 
-    print(f"Converting {pdf.name} with docling...", flush=True)
+
+def run_docling(docling: str, source: Path, out_dir: Path, ocr: bool) -> Path:
+    """Run docling embedded-image conversion; return the produced .md file."""
+    cmd = build_docling_cmd(docling, source, out_dir, ocr)
+    print(f"Converting {source.name} with docling...", flush=True)
     subprocess.run(cmd, check=True)
 
-    produced = out_dir / f"{pdf.stem}.md"
+    produced = out_dir / f"{source.stem}.md"
     if produced.is_file():
         return produced
     # Fall back to whatever single .md docling emitted.
@@ -290,20 +293,21 @@ def download_pdf(url: str, dest_dir: Path) -> Path:
     return dest
 
 
-def convert(pdf: Path, output_dir: Path, ocr: bool, force: bool,
+def convert(source: Path, output_dir: Path, ocr: bool, force: bool,
             postprocess: bool) -> Tuple[Path, Path, int, dict]:
-    """Run the full PDF -> Markdown pipeline.
+    """Run the full PDF/HTML -> Markdown pipeline.
 
-    Returns (pdf_copy, out_md, image_count, pipeline_stats).
+    Returns (source_copy, out_md, image_count, pipeline_stats).
     """
-    if not pdf.is_file():
-        raise SystemExit(f"Error: not a file: {pdf}")
-    if pdf.suffix.lower() != ".pdf":
-        raise SystemExit(f"Error: expected a .pdf file, got: {pdf}")
+    if not source.is_file():
+        raise SystemExit(f"Error: not a file: {source}")
+    if source.suffix.lower() not in (".pdf", ".html"):
+        raise SystemExit(f"Error: expected a .pdf or .html file, got: {source}")
 
-    stem = pdf.stem
+    stem = source.stem
+    suffix = source.suffix.lower()
     output_dir.mkdir(parents=True, exist_ok=True)
-    pdf_copy = output_dir / f"{stem}.pdf"
+    source_copy = output_dir / f"{stem}{suffix}"
     out_md = output_dir / f"{stem}.md"
     images_dir = output_dir / f"{stem}.images"
 
@@ -317,14 +321,14 @@ def convert(pdf: Path, output_dir: Path, ocr: bool, force: bool,
 
     docling = find_docling()
 
-    # Copy the original PDF into the output directory.
-    if pdf.resolve() != pdf_copy.resolve():
-        shutil.copy2(pdf, pdf_copy)
+    # Copy the original source into the output directory.
+    if source.resolve() != source_copy.resolve():
+        shutil.copy2(source, source_copy)
 
     # Convert in a temp dir so the intermediate base64 markdown is discarded.
     tmp_dir = Path(tempfile.mkdtemp(prefix="pdf2markdown_"))
     try:
-        embedded_md = run_docling(docling, pdf, tmp_dir, ocr)
+        embedded_md = run_docling(docling, source, tmp_dir, ocr)
         count = split_images(embedded_md, out_md, images_dir)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -338,7 +342,7 @@ def convert(pdf: Path, output_dir: Path, ocr: bool, force: bool,
         print("Post-processing images (OCR + table/text/vector detection)...", flush=True)
         stats["postprocess"] = image_postprocess.postprocess(out_md, images_dir.name)
 
-    return pdf_copy, out_md, count, stats
+    return source_copy, out_md, count, stats
 
 
 def main() -> int:
