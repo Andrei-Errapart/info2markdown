@@ -200,3 +200,71 @@ class TIDocumentViewerSource(DatasheetSource):
         out = work_dir / f"{part}.html"
         out.write_text(build_html_document(part, "\n".join(bodies)), encoding="utf-8")
         return out, part
+
+
+_OXY_TOPIC_RE = re.compile(r"^GUID-[A-Fa-f0-9-]+\.html$")
+_GUID_RE = re.compile(
+    r"GUID-[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}")
+
+
+def parse_oxy_toc(index_html: str) -> List[str]:
+    soup = BeautifulSoup(index_html, "html.parser")
+    out: List[str] = []
+    seen = set()
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if _OXY_TOPIC_RE.match(href) and href not in seen:
+            seen.add(href)
+            out.append(href)
+    return out
+
+
+def extract_oxy_topic(topic_html: str) -> str:
+    soup = BeautifulSoup(topic_html, "html.parser")
+    art = soup.find("article")
+    return str(art) if art else ""
+
+
+def oxy_doc_title(index_html: str) -> Optional[str]:
+    soup = BeautifulSoup(index_html, "html.parser")
+    if soup.title and soup.title.get_text(strip=True):
+        return soup.title.get_text(strip=True)
+    return None
+
+
+def oxy_root_guid(url: str) -> Optional[str]:
+    m = _GUID_RE.search(url)
+    return m.group(0) if m else None
+
+
+class MicrochipOnlineDocsSource(DatasheetSource):
+    name = "microchip"
+
+    def matches(self, url: str) -> bool:
+        return urlsplit(url).netloc.lower() == "onlinedocs.microchip.com"
+
+    def fetch(self, url: str, work_dir: Path) -> Tuple[Path, str]:
+        index_html, index_url = fetch_text_and_url(url)
+        topics = parse_oxy_toc(index_html)
+        if not topics:
+            raise SystemExit(f"Error: no topics found at {url}")
+        base = index_url.rsplit("/", 1)[0] + "/"
+        stem = sanitize_stem(oxy_doc_title(index_html) or oxy_root_guid(index_url) or "datasheet")
+        topic_urls = [urljoin(base, t) for t in topics]
+        fetched = parallel_fetch_text(topic_urls)
+        bodies = []
+        for tu in topic_urls:
+            html = fetched.get(tu)
+            if not html:
+                print(f"Warning: failed to fetch {tu}", file=sys.stderr)
+                continue
+            body = extract_oxy_topic(html)
+            if not body:
+                print(f"Warning: no article content in {tu}", file=sys.stderr)
+                continue
+            bodies.append(inline_images(body, tu))
+        if not bodies:
+            raise SystemExit(f"Error: no topic content retrieved for {url}")
+        out = work_dir / f"{stem}.html"
+        out.write_text(build_html_document(stem, "\n".join(bodies)), encoding="utf-8")
+        return out, stem
