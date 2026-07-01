@@ -1,9 +1,8 @@
 # Dependencies for scripts/pdf2markdown
 # Conversion engine + image post-processing copied from /home/andrei/2026/mdoc.
 
-# PDF -> Markdown conversion engine. Pinned: Task 7 of the UniMERNet plan bumps
-# this to 2.107.0 once the suite is green on 2.69.1.
-docling==2.69.1
+# PDF -> Markdown conversion engine.
+docling==2.107.0
 
 # Image post-processing (table/text/vector detection). docling already pulls in
 # opencv, numpy, scipy and Pillow, but we import them directly so pin them here.
