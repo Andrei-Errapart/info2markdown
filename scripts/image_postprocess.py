@@ -135,50 +135,24 @@ class Ocr:
 
 
 class LatexOcr:
-    """Render an equation image to LaTeX with docling's CodeFormulaV2 model.
+    """Render an equation image to LaTeX with UniMERNet-base (shared recognizer).
 
-    Same idefics3 vision-language model docling's ``--enrich-formula`` uses for
-    PDFs (far better on dense formulas than the previous ONNX LaTeX-OCR), loaded
-    here directly so the HTML route's image equations get the same quality. The
-    weights come with docling and download on first use; lazily constructed so
-    the model only loads when a datasheet actually has labelled equations.
+    The base model is loaded once by ``unimernet_formula``; this class is a thin
+    path-based adapter so the HTML route's image equations get the same model as
+    the PDF route.
     """
 
-    _REPO = "docling-project/CodeFormulaV2"
-
     def __init__(self) -> None:
-        from huggingface_hub import snapshot_download
-        from transformers import AutoModelForImageTextToText, AutoProcessor
-        artifacts = snapshot_download(self._REPO)
-        self._proc = AutoProcessor.from_pretrained(artifacts)
-        self._model = AutoModelForImageTextToText.from_pretrained(
-            artifacts, device_map="cpu").eval()
-        self._prompt = self._proc.apply_chat_template(
-            [{"role": "user",
-              "content": [{"type": "image"}, {"type": "text", "text": "<formula>"}]}],
-            add_generation_prompt=True)
+        pass  # unimernet_formula loads the base model once, lazily.
 
     def to_latex(self, image_path: Path) -> Optional[str]:
-        import torch
         from PIL import Image
+        from unimernet_formula import recognize
         try:
-            img = Image.open(image_path).convert("RGB")
-            inp = self._proc(text=[self._prompt], images=[img], return_tensors="pt")
-            with torch.inference_mode():
-                gen = self._model.generate(**inp, max_new_tokens=512,
-                                           do_sample=False, use_cache=True)
-            out = self._proc.batch_decode(
-                gen[:, inp.input_ids.shape[1]:], skip_special_tokens=False)[0]
+            out = recognize(Image.open(image_path))
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("formula OCR failed for %s: %s", image_path.name, exc)
             return None
-        # docling's _post_process: truncate at end-of-turn, drop wrapper tokens.
-        idx = out.find("<end_of_utterance>")
-        if idx != -1:
-            out = out[:idx]
-        for token in ("</formula>", "<loc_0><loc_0><loc_500><loc_500>"):
-            out = out.replace(token, "")
-        out = out.strip()
         return out or None
 
 
