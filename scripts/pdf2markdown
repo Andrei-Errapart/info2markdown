@@ -39,6 +39,12 @@ fi
 if [ "$needs_setup" -eq 1 ]; then
     echo "Setting up virtual environment at $VENV (installing dependencies)..." >&2
     mkdir -p "$(dirname "$VENV")"
+    # `python -m venv` over an existing venv of a *different* Python version leaves
+    # a split environment (pip installs into the new lib/, but bin/python still
+    # points at the old one -> ModuleNotFoundError). Recreate cleanly on mismatch.
+    want=$("$PYTHON" -c 'import sys;print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+    have=$("$VENV/bin/python" -c 'import sys;print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo none)
+    [ "$want" != "$have" ] && rm -rf "$VENV"
     "$PYTHON" -m venv "$VENV"
     "$VENV/bin/pip" install --upgrade pip
     "$VENV/bin/pip" install -r "$SCRIPT_DIR/requirements.txt"
