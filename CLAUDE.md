@@ -72,7 +72,11 @@ upstream source of truth if this logic needs updating.
     formatting at all, so PDF prose subscripts can't be recovered.)
   - A final `_normalize_math` pass tidies the per-token-spaced LaTeX the formula
     models emit (`R _ { B L k }` → `R_{BLk}`) inside `$…$`/`$$…$$` spans, keeping
-    meaningful spaces (`\, `, `\mu A`, `\max off`). Then `_standardize_subscripts`
+    meaningful spaces (`\, `, `\mu A`, `\max off`). It also unwraps UniMERNet's
+    inconsistent `\mathsf{…}`/`\mathrm{…}` font commands to plain italic
+    (`_strip_font_commands`, `_FONT_STRIP_CMDS`) and drops the stray thin space
+    UniMERNet sometimes emits *inside* a number (`1\,2`→`12`), while keeping
+    number→unit thin spaces (`84.4\,\mu H`). Then `_standardize_subscripts`
     uses the equations as a dictionary of real variables and renders any *prose*
     subscript that matches one in the same inline-LaTeX form (`R BLKlower` /
     `R<sub>BLKlower</sub>` → `$R_{BLKlower}$`), so a variable looks identical in

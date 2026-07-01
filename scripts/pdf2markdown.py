@@ -344,11 +344,53 @@ def _normalize_latex(latex: str) -> str:
     return "".join(out)
 
 
+# UniMERNet wraps most variables/units in ``\mathsf`` (and some in ``\mathrm``),
+# inconsistently (``L_{\mathsf{M}}`` beside ``L_{\mathrm{R}}``). Unwrap both to
+# plain italic for one consistent, clean style (the pre-UniMERNet output used
+# neither). Tune which commands are stripped here.
+_FONT_STRIP_CMDS = (r"\mathsf", r"\mathrm")
+# A thin space UniMERNet sometimes emits *inside* a number (``1\,2`` should be
+# ``12``); a real number->unit thin space (``84.4\,\mu H``) is followed by a
+# letter/command, not a digit, so it is kept.
+_THIN_SPACE_IN_NUMBER_RE = re.compile(r"(?<=\d)\\,(?=\d)")
+_WORD_TAIL_RE = re.compile(r"\\[A-Za-z]+$")
+
+
+def _strip_font_commands(latex: str) -> str:
+    r"""Unwrap ``\mathsf{...}`` / ``\mathrm{...}`` to their content.
+
+    Balanced-brace aware (content nests: ``\mathsf{V_{TH}}`` -> ``V_{TH}``). A
+    space is inserted when a ``\word`` command would otherwise run into the
+    content's first letter (``\times\mathsf{N}`` -> ``\times N``, not
+    ``\timesN``)."""
+    for cmd in _FONT_STRIP_CMDS:
+        needle = cmd + "{"
+        while True:
+            i = latex.find(needle)
+            if i == -1:
+                break
+            depth, k = 1, i + len(needle)
+            while k < len(latex) and depth:
+                depth += (latex[k] == "{") - (latex[k] == "}")
+                k += 1
+            if depth != 0:
+                break  # unbalanced braces: leave as-is
+            content = latex[i + len(needle):k - 1]
+            sep = " " if (content[:1].isalpha()
+                          and _WORD_TAIL_RE.search(latex[:i])) else ""
+            latex = latex[:i] + sep + content + latex[k:]
+    return latex
+
+
 def _normalize_math(md: str) -> str:
     """Normalise the LaTeX inside every ``$$...$$`` and ``$...$`` span (only
     spans that look like math, to leave a stray ``$`` in prose alone)."""
     def norm(inner: str) -> str:
-        return _normalize_latex(inner) if re.search(r"[\\_^{}]", inner) else inner
+        if not re.search(r"[\\_^{}]", inner):
+            return inner
+        inner = _normalize_latex(inner)
+        inner = _strip_font_commands(inner)
+        return _THIN_SPACE_IN_NUMBER_RE.sub("", inner)
     md = re.sub(r"\$\$(.+?)\$\$", lambda m: f"$${norm(m.group(1))}$$", md, flags=re.S)
     md = re.sub(r"(?<!\$)\$(?!\$)([^$\n]+?)\$(?!\$)",
                 lambda m: f"${norm(m.group(1))}$", md)
