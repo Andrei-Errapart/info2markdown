@@ -85,7 +85,13 @@ upstream source of truth if this logic needs updating.
     `--enrich-formula` uses for PDFs — loaded directly here for the HTML route's
     *image* equations; far better on dense formulas than a plain LaTeX-OCR).
     PDF equations are vector/text, handled by docling's `--enrich-formula`
-    (emits `$$…$$`) during conversion, not here.
+    (emits `$$…$$`) during conversion, not here. **Model choice / upgrades:**
+    `docs/research/Images_To_Latex.md` surveys the image→LaTeX field (mid-2026)
+    and the evaluation pitfalls (benchmark with CDM, not BLEU). For this repo the
+    validated swap-in is **UniMERNet-base** (beats CodeFormulaV2 on born-digital
+    PDF equations); **PP-FormulaNet-L** is the other specialist worth A/B-ing in
+    this slot. Adopting a full engine like MinerU/PaddleOCR-VL would be a pipeline
+    replacement, not a model swap.
   - **DIAGRAM** (high edge density / few colors) → trace to `.svg` via `vtracer`,
     but **only for clean, simple line art** (`DIAGRAM_MAX_TEXT_REGIONS`,
     `DIAGRAM_MAX_COLORS`): vtracer deforms complex images and renders text as
