@@ -58,6 +58,46 @@ def recognize(img) -> str:
     return strip_eqno(latex)
 
 
+# The widest interior whitespace gap (as a fraction of crop width) that marks the
+# split between a formula and its right-margin equation number. Tune here.
+_TAG_GAP_FRAC = 0.12
+
+
+def split_formula_and_number(img):
+    r"""Split a formula crop at the widest interior whitespace gap.
+
+    docling's FORMULA bbox spans nearly the full page width — the formula on the
+    left, the ``(N)`` equation number far to the right, a large empty gap between.
+    Fed whole to UniMERNet, the formula is squished on resize into the fixed
+    192x672 frame, dropping trailing units/exponents and emitting long runs of
+    ``~`` for the whitespace. Cropping to the formula alone restores glyph
+    resolution; the number crop is returned separately for ``\tag{N}``.
+
+    Returns ``(formula_image, number_image_or_None)``.
+    """
+    import numpy as np
+    gray = np.asarray(img.convert("L"))
+    inked = np.where((gray < 200).any(axis=0))[0]
+    if inked.size == 0:
+        return img, None
+    trimmed = img.crop((int(inked[0]), 0, int(inked[-1]) + 1, img.height))
+    gaps = np.diff(inked)
+    if gaps.size:
+        g = int(gaps.argmax())
+        left = img.crop((int(inked[0]), 0, int(inked[g]) + 1, img.height))
+        right = img.crop((int(inked[g + 1]), 0, int(inked[-1]) + 1, img.height))
+        # A number is a small appendage far to the right, not a formula operand.
+        if int(gaps[g]) > _TAG_GAP_FRAC * gray.shape[1] and right.width < 0.4 * left.width:
+            return left, right
+    return trimmed, None
+
+
+def read_equation_number(img):
+    """Return the digits of an isolated ``(N)`` number crop, or None."""
+    digits = re.search(r"\d+", re.sub(r"\s+", "", recognize(img)))
+    return digits.group(0) if digits else None
+
+
 def _docling_imports():
     """All docling symbols the pipeline swap needs, in one place (eases upgrades)."""
     from docling.document_converter import DocumentConverter, PdfFormatOption
@@ -95,7 +135,13 @@ class UniMERNetFormulaModel(_BaseEnrich):
 
     def __call__(self, doc, element_batch):
         for el in element_batch:
-            el.item.text = recognize(el.image)
+            formula_img, number_img = split_formula_and_number(el.image)
+            latex = recognize(formula_img)
+            if number_img is not None:
+                tag = read_equation_number(number_img)
+                if tag:
+                    latex = f"{latex} \\tag{{{tag}}}"
+            el.item.text = latex
             yield el.item
 
 

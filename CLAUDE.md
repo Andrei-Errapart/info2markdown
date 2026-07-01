@@ -113,13 +113,22 @@ upstream source of truth if this logic needs updating.
   docling's `CodeFormulaModel`, which then never loads. UniMERNet is installed
   from a **fork** (`Andrei-Errapart/UniMERNet@8dfa160`) that makes it run on a
   modern transformers so it coexists with docling in one venv — stock `unimernet`
-  pins transformers 4.42.4, which is irreconcilable with docling. `strip_eqno`
-  drops the right-margin equation number UniMERNet reads into the crop.
-  - **Known limitation:** UniMERNet occasionally misreads a visually ambiguous
-    glyph (italic `l` vs `I`). Verified case: UCC256404 p.56 eq (46),
-    `R_{BLKlower}` → `R_{BLKIower}` (read correctly in eq (47) on the same page).
-    Not auto-corrected; recorded so a future equation-dictionary consensus pass
-    could revisit it.
+  pins transformers 4.42.4, which is irreconcilable with docling.
+  - **Equation-number handling (`split_formula_and_number`).** docling's FORMULA
+    bbox spans nearly the full page width: formula on the left, the `(N)` number
+    far right, a big empty gap between. Fed whole to UniMERNet, the formula is
+    squished on resize into the fixed 192×672 frame, dropping trailing
+    units/exponents (`µH`, `kHz`, `²`) and emitting long `~` runs for the
+    whitespace. So `__call__` splits the crop at the widest interior whitespace
+    gap, OCRs the *formula* alone (restores glyph resolution), and reads the
+    isolated `(N)` crop separately, appending `\tag{N}` (MinerU's approach —
+    numbers come from a separate element, never the formula OCR). `strip_eqno`
+    remains as a defensive fallback.
+  - **Known limitations:** UniMERNet occasionally misreads a visually ambiguous
+    glyph (italic `l`/`I`, `f`/`t`, `M`/`N`) — e.g. UCC256404 p.56 eq (46)
+    `R_{BLKlower}`→`R_{BLKIower}`. A lone equation number docling detects as its
+    own FORMULA region becomes a stray `$$(N)$$`. Neither is auto-corrected;
+    recorded for a future equation-dictionary consensus pass.
 
 - **`scripts/datasheet_sources.py`** — vendor-pluggable HTML datasheet fetchers.
   Defines the `DatasheetSource` interface; two adapters (`TIDocumentViewerSource`

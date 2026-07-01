@@ -17,14 +17,54 @@ def test_strip_eqno_noop_without_eqno():
 
 
 def test_formula_model_writes_latex_to_item(monkeypatch):
+    from PIL import Image
     monkeypatch.setattr(unimernet_formula, "recognize", lambda img: "R_{BLKupper}")
     from unimernet_formula import UniMERNetFormulaModel
     model = UniMERNetFormulaModel()
     item = types.SimpleNamespace(text="stale")
-    el = types.SimpleNamespace(item=item, image="fake-crop")
+    el = types.SimpleNamespace(item=item, image=Image.new("L", (100, 20), 255))
     out = list(model(doc=None, element_batch=[el]))
     assert item.text == "R_{BLKupper}"
     assert out == [item]
+
+
+def test_formula_model_appends_tag(monkeypatch):
+    from PIL import Image, ImageDraw
+    from unimernet_formula import UniMERNetFormulaModel
+    monkeypatch.setattr(unimernet_formula, "recognize", lambda img: "x=1")
+    monkeypatch.setattr(unimernet_formula, "read_equation_number", lambda img: "12")
+    # Formula block on the left, a small number block far to the right.
+    img = Image.new("L", (1000, 100), 255)
+    d = ImageDraw.Draw(img)
+    d.rectangle([20, 30, 400, 70], fill=0)
+    d.rectangle([900, 40, 950, 60], fill=0)
+    item = types.SimpleNamespace(text="")
+    el = types.SimpleNamespace(item=item, image=img)
+    list(UniMERNetFormulaModel()(doc=None, element_batch=[el]))
+    assert item.text == "x=1 \\tag{12}"
+
+
+def test_split_separates_right_margin_number():
+    from PIL import Image, ImageDraw
+    from unimernet_formula import split_formula_and_number
+    img = Image.new("L", (1000, 100), 255)
+    d = ImageDraw.Draw(img)
+    d.rectangle([20, 30, 400, 70], fill=0)    # formula (wide, left)
+    d.rectangle([900, 40, 950, 60], fill=0)   # number (small, far right)
+    formula, number = split_formula_and_number(img)
+    assert number is not None
+    assert formula.width < 500                # cropped to the formula
+    assert number.width < formula.width       # number is the small appendage
+
+
+def test_split_no_number_just_trims():
+    from PIL import Image, ImageDraw
+    from unimernet_formula import split_formula_and_number
+    img = Image.new("L", (600, 100), 255)
+    ImageDraw.Draw(img).rectangle([20, 30, 550, 70], fill=0)  # single wide block
+    formula, number = split_formula_and_number(img)
+    assert number is None
+    assert formula.width <= 540               # trimmed to the ink bbox
 
 
 def test_build_pdf_converter_uses_custom_pipeline():
