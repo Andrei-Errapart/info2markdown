@@ -52,15 +52,20 @@ upstream source of truth if this logic needs updating.
   `exec`s `pdf2markdown.py` with the venv's interpreter. Override the location
   with `PDF2MARKDOWN_VENV`, or the bootstrap interpreter with `PYTHON`.
 
-- **`scripts/pdf2markdown.py`** — the engine, run *inside* the venv (so it locates
-  `docling` next to `sys.executable`). Pipeline: copy the PDF → run `docling`
-  with `--image-export-mode embedded` into a **temp dir** → `split_images()`
-  decodes the base64 data-URIs into `<stem>.images/` and rewrites the links →
-  exact duplicate images are canonicalized to SHA-256 filenames → hand off to
-  post-processing. The intermediate base64 markdown is discarded; it never lands
-  in the output dir.
-  - The HTML route (`run_docling_html`) uses the docling **Python API** (not the
-    CLI) so it can (a) set `fetch_images=True` and (b) plug in a custom Markdown
+- **`scripts/pdf2markdown.py`** — the engine, run *inside* the venv. Both routes
+  drive docling through its **Python API**: `run_docling_pdf` (PDF) and
+  `run_docling_html` (HTML), each serialising to base64-embedded Markdown.
+  Pipeline: copy the source → convert with docling into a **temp dir** →
+  `split_images()` decodes the base64 data-URIs into `<stem>.images/` and rewrites
+  the links → exact duplicate images are canonicalized to SHA-256 filenames → hand
+  off to post-processing. The intermediate base64 markdown is discarded; it never
+  lands in the output dir.
+  - The PDF route (`run_docling_pdf`) builds its converter with
+    `unimernet_formula.build_pdf_converter`, whose custom pipeline OCRs each
+    detected formula region with **UniMERNet-base** instead of docling's
+    CodeFormulaV2 (see `scripts/unimernet_formula.py`).
+  - The HTML route (`run_docling_html`) uses the docling Python API so it can
+    (a) set `fetch_images=True` and (b) plug in a custom Markdown
     serializer that emits `<sub>`/`<sup>` — docling's HTML backend captures
     `<sub>`/`<sup>` formatting but the default serializer drops it, flattening
     prose like `V_comp` to `V comp`. (The PDF backend doesn't capture script
@@ -81,16 +86,15 @@ upstream source of truth if this logic needs updating.
     OCR cell positions, inline it
   - **TEXT** (text-dominant, low color count) → inline the OCR'd text
   - **EQUATION** (a `Equation N.` label just before the image ref) → inline
-    `$…$` via docling's **CodeFormulaV2** formula model (the same model
-    `--enrich-formula` uses for PDFs — loaded directly here for the HTML route's
-    *image* equations; far better on dense formulas than a plain LaTeX-OCR).
-    PDF equations are vector/text, handled by docling's `--enrich-formula`
-    (emits `$$…$$`) during conversion, not here. **Model choice / upgrades:**
+    `$…$` via **UniMERNet-base** (`unimernet_formula.recognize`), the same
+    recognizer the PDF route uses (see `scripts/unimernet_formula.py`). PDF
+    *formula regions* are handled during conversion by that module's custom
+    docling pipeline (emits `$$…$$`), not here. **Model choice / upgrades:**
     `docs/research/Images_To_Latex.md` surveys the image→LaTeX field (mid-2026)
-    and the evaluation pitfalls (benchmark with CDM, not BLEU). For this repo the
-    validated swap-in is **UniMERNet-base** (beats CodeFormulaV2 on born-digital
-    PDF equations); **PP-FormulaNet-L** is the other specialist worth A/B-ing in
-    this slot. Adopting a full engine like MinerU/PaddleOCR-VL would be a pipeline
+    and the evaluation pitfalls (benchmark with CDM, not BLEU). UniMERNet-base
+    was adopted because it beats CodeFormulaV2 on born-digital PDF equations;
+    **PP-FormulaNet-L** is the other specialist worth A/B-ing in this slot.
+    Adopting a full engine like MinerU/PaddleOCR-VL would be a pipeline
     replacement, not a model swap.
   - **DIAGRAM** (high edge density / few colors) → trace to `.svg` via `vtracer`,
     but **only for clean, simple line art** (`DIAGRAM_MAX_TEXT_REGIONS`,
@@ -100,6 +104,22 @@ upstream source of truth if this logic needs updating.
 
   Images replaced by inline text/table/LaTeX or by an SVG are deleted as orphans,
   so the images dir only keeps what's still referenced.
+
+- **`scripts/unimernet_formula.py`** — the shared formula OCR for both routes.
+  `recognize(img) -> LaTeX` loads **UniMERNet-base** once (downloaded on first
+  use, ~1.3 GB). `UniMERNetFormulaModel` is a docling enrichment model that OCRs
+  each detected FORMULA crop at ~288 DPI (`images_scale = 4.0`, vs docling's
+  120); `UniMERNetPdfPipeline` subclasses `StandardPdfPipeline` to swap it in for
+  docling's `CodeFormulaModel`, which then never loads. UniMERNet is installed
+  from a **fork** (`Andrei-Errapart/UniMERNet@8dfa160`) that makes it run on a
+  modern transformers so it coexists with docling in one venv — stock `unimernet`
+  pins transformers 4.42.4, which is irreconcilable with docling. `strip_eqno`
+  drops the right-margin equation number UniMERNet reads into the crop.
+  - **Known limitation:** UniMERNet occasionally misreads a visually ambiguous
+    glyph (italic `l` vs `I`). Verified case: UCC256404 p.56 eq (46),
+    `R_{BLKlower}` → `R_{BLKIower}` (read correctly in eq (47) on the same page).
+    Not auto-corrected; recorded so a future equation-dictionary consensus pass
+    could revisit it.
 
 - **`scripts/datasheet_sources.py`** — vendor-pluggable HTML datasheet fetchers.
   Defines the `DatasheetSource` interface; two adapters (`TIDocumentViewerSource`
