@@ -197,6 +197,43 @@ def test_distinct_diagram_is_not_deduplicated(artifact_dir):
     assert len(svg_targets) == 2, f"expected 2 distinct SVG targets, got: {svg_targets}"
 
 
+def test_repeated_ref_to_deduped_diagram_leaves_no_dangling_link(artifact_dir):
+    """Regression: a collapsed exact-duplicate diagram (ONE canonical PNG shared
+    by multiple Markdown refs, as deduplicate_images produces) that also phash-
+    matches an EARLIER diagram must not leave a dangling PNG ref on the 2nd+ ref.
+
+    Before the fix, ref #1 to the shared PNG deleted it and redirected to the
+    earlier diagram's SVG (creating no same-named SVG), so ref #2 fell through to
+    the "PNG missing" branch and re-emitted ![...](…<sha>.png) with no file."""
+    import re
+
+    images_dir = artifact_dir / "doc.images"
+    images_dir.mkdir()
+    _make_logo_png(images_dir, "logo_a", padding=2)   # first diagram -> canonical SVG
+    _make_logo_png(images_dir, "logo_b", padding=6)   # near-dup of logo_a, referenced twice
+    md_path = artifact_dir / "doc.md"
+    md_path.write_text(
+        "![a](doc.images/logo_a.png)\n\n"
+        "![b](doc.images/logo_b.png)\n\n"
+        "![b again](doc.images/logo_b.png)\n",
+        encoding="utf-8",
+    )
+
+    with (
+        patch.object(image_postprocess, "classify", side_effect=_classify_all_diagram),
+        patch.object(image_postprocess, "png_to_svg", side_effect=_stub_png_to_svg),
+    ):
+        postprocess(md_path, "doc.images")
+
+    md_text = md_path.read_text(encoding="utf-8")
+    # Every surviving ref must point at a file that exists on disk.
+    for target in re.findall(r"\]\(doc\.images/([^)]+)\)", md_text):
+        assert (images_dir / target).is_file(), f"dangling ref to missing {target}"
+    # No PNG ref survives; all three refs collapsed onto the one canonical SVG.
+    assert "logo_b.png" not in md_text
+    assert md_text.count(".svg)") == 3
+
+
 # ---------------------------------------------------------------------------
 # Unit tests for diagram_phash and _hamming
 # ---------------------------------------------------------------------------

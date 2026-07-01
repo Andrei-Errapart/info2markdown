@@ -521,7 +521,7 @@ def main() -> int:
         print(f"  Dedupe   : {dedupe.get('duplicate_refs', 0)} duplicate ref(s), "
               f"{dedupe.get('removed_files', 0)} file(s) removed")
     if pp:
-        print(f"  Inlined  : {pp.get('table', 0)} table(s), {pp.get('text', 0)} text image(s)")
+        print(f"  Inlined  : {pp.get('text', 0)} text image(s)")
         print(f"  Vector   : {pp.get('diagram', 0)} diagram(s) -> SVG")
         print(f"  Kept PNG : {pp.get('photo', 0)} photo(s)")
         vdr = pp.get("visual_dedupe_refs", 0)

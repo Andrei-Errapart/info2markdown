@@ -5,15 +5,16 @@ image_postprocess.py - Post-process images extracted from a converted PDF.
 For every image referenced by a Markdown file, run OCR + structural analysis to
 decide what it really is, and replace the raster image with something better:
 
-  TABLE   -> reconstruct a Markdown table from OCR'd cells, inline it
   TEXT    -> inline the OCR'd text, dropping the image
   DIAGRAM -> trace the raster to SVG (vector graphics) and link the .svg instead
   PHOTO   -> leave the raster image untouched
 
-This guards against docling leaving real text/tables as flat images, and turns
+This guards against docling leaving real text as a flat image, and turns
 line-art diagrams into crisp vector graphics. Inlining is intentionally
-*conservative*: an image is only flattened to text/table when detection is
-high-confidence, so uncertain cases stay as images (SVG or PNG).
+*conservative*: an image is only flattened to text when detection is
+high-confidence, so uncertain cases stay as images (SVG or PNG). Tables are left
+to docling (emitted as Markdown directly); figures reaching here are never
+re-OCR'd into tables — that reliably garbled diagrams/plots/pin-outs.
 
 Detection / conversion logic is ported from
 /home/andrei/2026/mdoc/vector_postprocessor.py (TableDetector, ImageClassifier,
@@ -33,10 +34,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Conservative tuning knobs
 # ---------------------------------------------------------------------------
-TABLE_MIN_CELLS = 6          # >= 2x3 grid cells suggests a table
-TABLE_MIN_ROWS = 2
-TABLE_MIN_COLS = 2
-
 TEXT_MIN_REGIONS = 5         # need several OCR regions to trust "this is text"
 TEXT_AREA_RATIO_MIN = 0.10   # OCR-covered area / image area
 TEXT_MIN_MEAN_CONF = 0.65    # mean OCR confidence
@@ -78,7 +75,6 @@ IMG_REF_RE = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
 
 
 class ImageType(Enum):
-    TABLE = "table"
     TEXT = "text"
     EQUATION = "equation"
     DIAGRAM = "diagram"
@@ -172,40 +168,8 @@ def wrap_latex(latex: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Table detection (ported from mdoc TableDetector)
+# OCR row grouping
 # ---------------------------------------------------------------------------
-def detect_table_structure(image_path: Path) -> Dict:
-    """Detect a table via grid-line analysis. Returns is_table/confidence/cells/borders."""
-    import cv2
-    img = cv2.imread(str(image_path))
-    if img is None:
-        return {"is_table": False, "confidence": 0.0, "grid_cells": 0, "has_borders": False}
-
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 1))
-    detect_h = cv2.morphologyEx(gray, cv2.MORPH_OPEN, horizontal_kernel, iterations=2)
-    horizontal = cv2.threshold(detect_h, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-
-    vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 40))
-    detect_v = cv2.morphologyEx(gray, cv2.MORPH_OPEN, vertical_kernel, iterations=2)
-    vertical = cv2.threshold(detect_v, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-
-    table_mask = cv2.add(horizontal, vertical)
-    contours, _ = cv2.findContours(table_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-
-    min_area = (img.shape[0] * img.shape[1]) * 0.001
-    grid_cells = len([c for c in contours if cv2.contourArea(c) > min_area])
-    is_table = grid_cells >= TABLE_MIN_CELLS
-    has_borders = grid_cells > 0 and (
-        cv2.countNonZero(horizontal) > gray.shape[0] * 0.3
-        and cv2.countNonZero(vertical) > gray.shape[1] * 0.3
-    )
-    confidence = min(grid_cells / 20.0, 1.0) if is_table else 0.0
-    return {"is_table": is_table, "confidence": confidence,
-            "grid_cells": grid_cells, "has_borders": has_borders}
-
-
 def _group_rows(regions: List[Dict], y_threshold: float = 20.0) -> List[List[Dict]]:
     """Group OCR regions into rows by y-proximity, each row sorted left-to-right."""
     if not regions:
@@ -227,24 +191,6 @@ def _group_rows(regions: List[Dict], y_threshold: float = 20.0) -> List[List[Dic
     for row in rows:
         row.sort(key=lambda r: r["bbox"][0])
     return rows
-
-
-def table_rows_to_markdown(rows: List[List[Dict]]) -> Optional[str]:
-    """Render grouped rows as a Markdown table (None if too small to be a table)."""
-    if len(rows) < TABLE_MIN_ROWS:
-        return None
-    max_cols = max(len(r) for r in rows)
-    if max_cols < TABLE_MIN_COLS:
-        return None
-
-    def cells(row: List[Dict]) -> List[str]:
-        c = [r["text"].strip() for r in row]
-        return c + [""] * (max_cols - len(c))
-
-    lines = ["| " + " | ".join(cells(rows[0])) + " |",
-             "|" + "|".join([" --- "] * max_cols) + "|"]
-    lines += ["| " + " | ".join(cells(row)) + " |" for row in rows[1:]]
-    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -359,14 +305,13 @@ def diagram_phash(image_path: Path) -> bytes:
 def classify(image_path: Path, ocr: Ocr) -> Tuple[ImageType, object]:
     """Return (ImageType, payload). Payload is markdown str for TABLE/TEXT, else None."""
     regions = ocr.regions(image_path)            # OCR every image (per the requirement)
-    table_info = detect_table_structure(image_path)
     metrics = image_metrics(image_path)
 
-    if table_info["is_table"] and table_info["has_borders"]:
-        md_table = table_rows_to_markdown(_group_rows(regions))
-        if md_table:
-            return ImageType.TABLE, md_table
-
+    # Tables are handled by docling's layout model and emitted as Markdown
+    # directly; images reaching here are figures (diagrams, plots, schematics,
+    # mechanical drawings). We deliberately do NOT reconstruct tables from them —
+    # grid-line OCR reliably garbled block diagrams / pin-outs / plots into
+    # nonsense tables, and no extracted picture was ever a real table.
     if is_text_image(regions, metrics):
         text = text_rows_to_markdown(_group_rows(regions))
         if text:
@@ -402,6 +347,7 @@ def postprocess(md_path: Path, images_dirname: str) -> Dict[str, int]:
     counts["visual_dedupe_refs"] = 0
     counts["visual_dedupe_files"] = 0
     canonical_diagrams: Dict[bytes, Path] = {}  # fingerprint -> canonical SVG path
+    resolved: Dict[str, str] = {}  # diagram ref-target -> final image-ref target
 
     def get_latex_ocr() -> LatexOcr:
         nonlocal latex_ocr
@@ -453,16 +399,25 @@ def postprocess(md_path: Path, images_dirname: str) -> Dict[str, int]:
             # LaTeX-OCR failed → fall through, handle as an ordinary image.
 
         kind, payload = decide(target)
-        if kind in (ImageType.TABLE, ImageType.TEXT):
+        if kind == ImageType.TEXT:
             return f"\n{payload}\n"
         if kind == ImageType.DIAGRAM:
+            # A repeat ref to a diagram already resolved on an earlier ref reuses
+            # the same replacement target. Without this, a 2nd ref to a PNG that
+            # the phash-dedupe below already deleted (redirecting to *another*
+            # image's SVG, leaving no same-named SVG) falls through to the
+            # "PNG missing" case and re-emits a dangling link.
+            if target in resolved:
+                return f"![{alt}]({resolved[target]})"
+
             png_path = md_path.parent / target
             svg_path = png_path.with_suffix(".svg")
 
             # If this exact target was already processed (PNG traced → SVG on a
             # prior ref), the SVG exists and the PNG is gone — just reuse it.
             if svg_path.is_file() and not png_path.is_file():
-                return f"![{alt}]({prefix}{svg_path.name})"
+                resolved[target] = f"{prefix}{svg_path.name}"
+                return f"![{alt}]({resolved[target]})"
 
             if not png_path.is_file():
                 return match.group(0)
@@ -478,11 +433,13 @@ def postprocess(md_path: Path, images_dirname: str) -> Dict[str, int]:
                 png_path.unlink()
                 counts["visual_dedupe_files"] += 1
                 counts["visual_dedupe_refs"] += 1
-                return f"![{alt}]({prefix}{canonical_svg.name})"
+                resolved[target] = f"{prefix}{canonical_svg.name}"
+                return f"![{alt}]({resolved[target]})"
 
             if png_to_svg(png_path, svg_path):
                 canonical_diagrams[fingerprint] = svg_path
-                return f"![{alt}]({prefix}{svg_path.name})"
+                resolved[target] = f"{prefix}{svg_path.name}"
+                return f"![{alt}]({resolved[target]})"
             return match.group(0)  # keep PNG if tracing failed
         return match.group(0)  # PHOTO / UNKNOWN: leave as-is
 
