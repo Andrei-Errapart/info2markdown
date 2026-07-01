@@ -233,7 +233,7 @@ def test_build_pdf_converter_uses_custom_pipeline():
     from unimernet_formula import build_pdf_converter, UniMERNetPdfPipeline
     from docling.datamodel.base_models import InputFormat
     conv = build_pdf_converter(ocr=False)
-    fmt = conv.format_options[InputFormat.PDF]
+    fmt = conv.format_to_options[InputFormat.PDF]
     assert fmt.pipeline_cls is UniMERNetPdfPipeline
     assert fmt.pipeline_options.do_formula_enrichment is False
     assert fmt.pipeline_options.do_table_structure is True
