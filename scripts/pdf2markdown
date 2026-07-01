@@ -18,19 +18,21 @@
 # Environment:
 #   PDF2MARKDOWN_VENV   Override the venv location
 #                       (default: ${XDG_CACHE_HOME:-~/.cache}/pdf2markdown/venv)
-#   PYTHON              Python interpreter used to create the venv (default: python3)
+#   PYTHON              Python interpreter used to create the venv
+#                       (default: python3.12 if present, else python3)
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV="${PDF2MARKDOWN_VENV:-${XDG_CACHE_HOME:-$HOME/.cache}/pdf2markdown/venv}"
-PYTHON="${PYTHON:-python3}"
+# UniMERNet needs Python >=3.10; prefer 3.12 (the version the deps are pinned for).
+PYTHON="${PYTHON:-$(command -v python3.12 || command -v python3)}"
 
-# (Re)provision the venv if it is missing docling or any post-processing dep.
-# This also picks up newly added requirements for an already-created venv.
+# (Re)provision the venv if it is missing docling, unimernet, or any
+# post-processing dep. This also picks up newly added requirements for an
+# already-created venv.
 needs_setup=1
-if [ -x "$VENV/bin/docling" ] && \
-   "$VENV/bin/python" -c 'import cv2, numpy, scipy, PIL, rapidocr, onnxruntime, vtracer, bs4, transformers' 2>/dev/null; then
+if "$VENV/bin/python" -c 'import cv2, numpy, scipy, PIL, rapidocr, onnxruntime, vtracer, bs4, transformers, docling, unimernet' 2>/dev/null; then
     needs_setup=0
 fi
 
