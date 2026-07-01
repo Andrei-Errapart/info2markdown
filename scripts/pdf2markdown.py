@@ -36,7 +36,6 @@ import hashlib
 import re
 import shutil
 import ssl
-import subprocess
 import sys
 import tempfile
 import urllib.error
@@ -46,6 +45,7 @@ from typing import Dict, Optional, Tuple
 from urllib.parse import unquote, urlsplit
 
 from datasheet_sources import find_source
+from unimernet_formula import build_pdf_converter
 
 try:
     import certifi
@@ -61,34 +61,6 @@ IMAGE_RE = re.compile(
 
 # Matches a Markdown image: ![alt](target)
 IMG_REF_RE = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
-
-
-def find_docling() -> str:
-    """Locate the docling CLI, preferring the one beside the current interpreter."""
-    candidate = Path(sys.executable).parent / "docling"
-    if candidate.exists():
-        return str(candidate)
-    found = shutil.which("docling")
-    if found:
-        return found
-    raise SystemExit(
-        "Error: docling not found. Run via the 'pdf2markdown' wrapper, or "
-        "`pip install -r scripts/requirements.txt` in your environment."
-    )
-
-
-def build_docling_cmd(docling: str, source: Path, out_dir: Path, ocr: bool) -> list:
-    """Build the docling CLI argv for a .pdf or .html source."""
-    cmd = [docling, str(source), "--to", "md", "--image-export-mode", "embedded"]
-    if source.suffix.lower() == ".pdf":
-        if ocr:
-            cmd.append("--ocr")
-        # --enrich-formula: detect formula regions and emit them as LaTeX. PDF
-        # equations are vector/text (not images), so this is the only way to get
-        # them; the HTML route handles its image equations via LaTeX-OCR instead.
-        cmd += ["--tables", "--table-mode", "accurate", "--enrich-formula"]
-    cmd += ["--output", str(out_dir)]
-    return cmd
 
 
 def run_docling_html(source: Path, out_dir: Path) -> Path:
@@ -139,25 +111,27 @@ def run_docling_html(source: Path, out_dir: Path) -> Path:
     return out_md
 
 
-def run_docling(docling: str, source: Path, out_dir: Path, ocr: bool) -> Path:
-    """Run docling embedded-image conversion; return the produced .md file."""
+def run_docling_pdf(source: Path, out_dir: Path, ocr: bool) -> Path:
+    """Convert a PDF via docling's Python API, OCRing formulas with UniMERNet-base.
+
+    Mirrors the HTML route: convert, then serialise to embedded-image Markdown
+    (base64 data-URIs) so split_images() extracts the images exactly as before.
+    """
+    from docling_core.types.doc import ImageRefMode
+    print(f"Converting {source.name} with docling (UniMERNet formulas)...", flush=True)
+    converter = build_pdf_converter(ocr)
+    result = converter.convert(str(source))
+    md_text = result.document.export_to_markdown(image_mode=ImageRefMode.EMBEDDED)
+    out_md = out_dir / f"{source.stem}.md"
+    out_md.write_text(md_text, encoding="utf-8")
+    return out_md
+
+
+def run_docling(source: Path, out_dir: Path, ocr: bool) -> Path:
+    """Dispatch to the HTML or PDF docling Python-API route."""
     if source.suffix.lower() == ".html":
         return run_docling_html(source, out_dir)
-    cmd = build_docling_cmd(docling, source, out_dir, ocr)
-    print(f"Converting {source.name} with docling...", flush=True)
-    subprocess.run(cmd, check=True)
-
-    produced = out_dir / f"{source.stem}.md"
-    if produced.is_file():
-        return produced
-    # Fall back to whatever single .md docling emitted.
-    candidates = list(out_dir.glob("*.md"))
-    if len(candidates) == 1:
-        return candidates[0]
-    raise SystemExit(
-        f"Error: could not locate docling output .md in {out_dir} "
-        f"(found: {[c.name for c in candidates]})"
-    )
+    return run_docling_pdf(source, out_dir, ocr)
 
 
 def split_images(source_md: Path, out_md: Path, images_dir: Path) -> int:
@@ -453,8 +427,6 @@ def convert(source: Path, output_dir: Path, ocr: bool, force: bool,
     if force and images_dir.exists():
         shutil.rmtree(images_dir)
 
-    docling = find_docling()
-
     # Copy the original source into the output directory.
     if source.resolve() != source_copy.resolve():
         shutil.copy2(source, source_copy)
@@ -462,7 +434,7 @@ def convert(source: Path, output_dir: Path, ocr: bool, force: bool,
     # Convert in a temp dir so the intermediate base64 markdown is discarded.
     tmp_dir = Path(tempfile.mkdtemp(prefix="pdf2markdown_"))
     try:
-        embedded_md = run_docling(docling, source, tmp_dir, ocr)
+        embedded_md = run_docling(source, tmp_dir, ocr)
         count = split_images(embedded_md, out_md, images_dir)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
