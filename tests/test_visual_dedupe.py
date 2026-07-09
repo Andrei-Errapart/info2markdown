@@ -87,6 +87,10 @@ def _stub_png_to_svg(png_path: Path, svg_path: Path) -> bool:
     return True
 
 
+class _StubOcr:
+    pass
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -121,6 +125,7 @@ def test_near_duplicate_logos_deduplicate_to_single_svg(logo_workspace):
     md_path, images_dir = logo_workspace
 
     with (
+        patch.object(image_postprocess, "Ocr", _StubOcr),
         patch.object(image_postprocess, "classify", side_effect=_classify_all_diagram),
         patch.object(image_postprocess, "png_to_svg", side_effect=_stub_png_to_svg),
     ):
@@ -178,6 +183,7 @@ def test_distinct_diagram_is_not_deduplicated(artifact_dir):
     )
 
     with (
+        patch.object(image_postprocess, "Ocr", _StubOcr),
         patch.object(image_postprocess, "classify", side_effect=_classify_all_diagram),
         patch.object(image_postprocess, "png_to_svg", side_effect=_stub_png_to_svg),
     ):
@@ -220,6 +226,7 @@ def test_repeated_ref_to_deduped_diagram_leaves_no_dangling_link(artifact_dir):
     )
 
     with (
+        patch.object(image_postprocess, "Ocr", _StubOcr),
         patch.object(image_postprocess, "classify", side_effect=_classify_all_diagram),
         patch.object(image_postprocess, "png_to_svg", side_effect=_stub_png_to_svg),
     ):

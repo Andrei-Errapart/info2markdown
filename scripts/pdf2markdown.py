@@ -10,6 +10,7 @@ Given an input PDF and an output directory, this produces in that directory:
   - a copy of the original PDF                       (<stem>.pdf)
   - the extracted images in a subdirectory           (<stem>.images/)
   - a Markdown file referring to those image files   (<stem>.md)
+  - an image occurrence source map                   (<stem>.image-map.json)
 
 docling (https://github.com/DS4SD/docling) first emits Markdown with base64-
 embedded PNG images; this script then splits those out into separate image
@@ -24,7 +25,7 @@ Usage:
     pdf2markdown.py [options] <input.pdf> [output_dir]
 
 Options:
-    -f, --force          Overwrite existing <stem>.md / <stem>.images/ in output dir
+    -f, --force          Overwrite existing <stem>.md / <stem>.images/ / image map
         --no-ocr         Skip OCR during docling conversion (faster; text-only PDFs)
         --no-postprocess Skip the image post-processing pass (keep all images as PNG)
     -h, --help           Show this help
@@ -33,6 +34,7 @@ Options:
 import argparse
 import base64
 import hashlib
+import json
 import re
 import shutil
 import ssl
@@ -63,7 +65,109 @@ IMAGE_RE = re.compile(
 IMG_REF_RE = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
 
 
-def run_docling_html(source: Path, out_dir: Path) -> Path:
+def _attr_or_key(obj: object, name: str, default: object = None) -> object:
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(name, default)
+    return getattr(obj, name, default)
+
+
+def _first_attr_or_key(obj: object, names: Tuple[str, ...]) -> object:
+    for name in names:
+        value = _attr_or_key(obj, name)
+        if value is not None:
+            return value
+    return None
+
+
+def _bbox_to_map(bbox: object) -> Optional[Dict[str, float]]:
+    if bbox is None:
+        return None
+    values = {
+        "l": _first_attr_or_key(bbox, ("l", "left", "x0")),
+        "t": _first_attr_or_key(bbox, ("t", "top", "y0")),
+        "r": _first_attr_or_key(bbox, ("r", "right", "x1")),
+        "b": _first_attr_or_key(bbox, ("b", "bottom", "y1")),
+    }
+    if any(value is None for value in values.values()):
+        return None
+    try:
+        return {key: float(value) for key, value in values.items()}
+    except (TypeError, ValueError):
+        return None
+
+
+def _page_from_prov(prov: object) -> Optional[int]:
+    value = _first_attr_or_key(prov, ("page_no", "page", "page_number"))
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _item_alt_text(item: object) -> Optional[str]:
+    value = _first_attr_or_key(
+        item,
+        ("alt", "alt_text", "text", "caption_text", "name", "label"),
+    )
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        value = " ".join(str(part) for part in value if part is not None)
+    value = str(value).strip()
+    return value or None
+
+
+def _iter_docling_items(document: object) -> list:
+    if document is None:
+        return []
+    iterator = getattr(document, "iterate_items", None)
+    if callable(iterator):
+        try:
+            return [item[0] if isinstance(item, tuple) else item for item in iterator()]
+        except Exception:
+            pass
+
+    items = []
+    for name in ("pictures", "images", "figures", "body"):
+        value = _attr_or_key(document, name)
+        if isinstance(value, (list, tuple)):
+            items.extend(value)
+    return items
+
+
+def extract_docling_image_metadata(document: object) -> list[dict]:
+    """Best-effort ordered image metadata from a docling document."""
+    entries = []
+    for item in _iter_docling_items(document):
+        cls_name = item.__class__.__name__.lower()
+        label = str(_attr_or_key(item, "label", "")).lower()
+        has_image = _attr_or_key(item, "image") is not None
+        if not has_image and "picture" not in cls_name and "image" not in cls_name and "picture" not in label:
+            continue
+
+        provs = _attr_or_key(item, "prov")
+        if provs is None:
+            prov = None
+        elif isinstance(provs, (list, tuple)):
+            prov = provs[0] if provs else None
+        else:
+            prov = provs
+
+        bbox = _bbox_to_map(_attr_or_key(prov, "bbox"))
+        entries.append({
+            "alt": _item_alt_text(item),
+            "page": _page_from_prov(prov),
+            "bbox": bbox,
+            "coord_system": "docling" if bbox is not None else None,
+        })
+    return entries
+
+
+def run_docling_html(source: Path, out_dir: Path) -> Tuple[Path, list[dict]]:
     """Convert an HTML source via docling's Python API with image fetching on.
 
     The docling CLI does not expose the HTML backend's ``fetch_images`` option,
@@ -108,10 +212,10 @@ def run_docling_html(source: Path, out_dir: Path) -> Path:
     md_text = re.sub(r"(\w)[ \t]+(<su[bp]>)", r"\1\2", md_text)
     out_md = out_dir / f"{source.stem}.md"
     out_md.write_text(md_text, encoding="utf-8")
-    return out_md
+    return out_md, extract_docling_image_metadata(result.document)
 
 
-def run_docling_pdf(source: Path, out_dir: Path, ocr: bool) -> Path:
+def run_docling_pdf(source: Path, out_dir: Path, ocr: bool) -> Tuple[Path, list[dict]]:
     """Convert a PDF via docling's Python API, OCRing formulas with UniMERNet-base.
 
     Mirrors the HTML route: convert, then serialise to embedded-image Markdown
@@ -124,17 +228,44 @@ def run_docling_pdf(source: Path, out_dir: Path, ocr: bool) -> Path:
     md_text = result.document.export_to_markdown(image_mode=ImageRefMode.EMBEDDED)
     out_md = out_dir / f"{source.stem}.md"
     out_md.write_text(md_text, encoding="utf-8")
-    return out_md
+    return out_md, extract_docling_image_metadata(result.document)
 
 
-def run_docling(source: Path, out_dir: Path, ocr: bool) -> Path:
+def run_docling(source: Path, out_dir: Path, ocr: bool) -> Tuple[Path, list[dict]]:
     """Dispatch to the HTML or PDF docling Python-API route."""
     if source.suffix.lower() == ".html":
         return run_docling_html(source, out_dir)
     return run_docling_pdf(source, out_dir, ocr)
 
 
-def split_images(source_md: Path, out_md: Path, images_dir: Path) -> int:
+def _empty_image_map_entry(
+    occurrence: int,
+    alt: str,
+    original_file: str,
+    data: bytes,
+    docling_metadata: Optional[dict],
+) -> dict:
+    metadata = docling_metadata or {}
+    return {
+        "occurrence": occurrence,
+        "alt": metadata.get("alt") or alt,
+        "original_file": original_file,
+        "final_file": original_file,
+        "status": "kept",
+        "page": metadata.get("page"),
+        "bbox": metadata.get("bbox"),
+        "coord_system": metadata.get("coord_system"),
+        "content_sha256": hashlib.sha256(data).hexdigest(),
+    }
+
+
+def split_images(
+    source_md: Path,
+    out_md: Path,
+    images_dir: Path,
+    image_entries: Optional[list[dict]] = None,
+    docling_metadata: Optional[list[dict]] = None,
+) -> int:
     """Extract embedded images from source_md into images_dir, write rewritten out_md.
 
     Ported from /home/andrei/2026/mdoc/divide_png_md. Returns the image count.
@@ -163,6 +294,13 @@ def split_images(source_md: Path, out_md: Path, images_dir: Path) -> int:
         fname = f"image_{counter['n']:03d}_{digest}.{ext}"
         ensure_dir()
         (images_dir / fname).write_bytes(data)
+        if image_entries is not None:
+            metadata = None
+            if docling_metadata and counter["n"] <= len(docling_metadata):
+                metadata = docling_metadata[counter["n"] - 1]
+            image_entries.append(
+                _empty_image_map_entry(counter["n"], alt, fname, data, metadata)
+            )
         return f"![{alt}]({images_dir.name}/{fname})"
 
     new_content = IMAGE_RE.sub(replace, content)
@@ -280,6 +418,97 @@ def deduplicate_images(md_path: Path, images_dirname: str) -> Dict[str, object]:
 
     md_path.write_text(new_content, encoding="utf-8")
     return stats
+
+
+def write_image_map(path: Path, payload: dict) -> None:
+    path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def update_image_map_for_dedupe(entries: list[dict], dedupe_stats: Dict[str, object]) -> None:
+    canonical_by_original = dedupe_stats.get("canonical_by_original", {})
+    duplicate_groups = dedupe_stats.get("duplicate_groups", {})
+    duplicate_originals = set()
+    if isinstance(duplicate_groups, dict):
+        for originals in duplicate_groups.values():
+            if isinstance(originals, list):
+                duplicate_originals.update(originals[1:])
+
+    if not isinstance(canonical_by_original, dict):
+        return
+
+    for entry in entries:
+        original = entry.get("original_file")
+        canonical = canonical_by_original.get(original)
+        if canonical is None:
+            entry["final_file"] = original
+            entry["status"] = "missing"
+            continue
+        entry["final_file"] = canonical
+        entry["status"] = "deduped" if original in duplicate_originals else "kept"
+
+
+def _in_scope_markdown_targets(md_text: str, images_dirname: str) -> list[str]:
+    prefix = f"{images_dirname}/"
+    return [
+        match.group(2).strip()[len(prefix):]
+        for match in IMG_REF_RE.finditer(md_text)
+        if match.group(2).strip().startswith(prefix)
+    ]
+
+
+def _target_matches_entry(target: str, entry: dict) -> bool:
+    final_file = entry.get("final_file")
+    if not final_file:
+        return False
+    if target == final_file:
+        return True
+    return target == Path(str(final_file)).with_suffix(".svg").name
+
+
+def update_image_map_from_markdown(
+    entries: list[dict],
+    md_path: Path,
+    images_dirname: str,
+) -> None:
+    md_text = md_path.read_text(encoding="utf-8") if md_path.is_file() else ""
+    targets = _in_scope_markdown_targets(md_text, images_dirname)
+    images_dir = md_path.parent / images_dirname
+
+    target_index = 0
+    same_ref_count = len(targets) == len(entries)
+    for entry_index, entry in enumerate(entries):
+        target = None
+        if target_index < len(targets):
+            candidate = targets[target_index]
+            remaining_targets = len(targets) - target_index
+            remaining_entries = len(entries) - entry_index
+            if same_ref_count or _target_matches_entry(candidate, entry):
+                target = candidate
+                target_index += 1
+            elif remaining_targets >= remaining_entries:
+                target = candidate
+                target_index += 1
+
+        if target is None:
+            entry["final_file"] = None
+            entry["status"] = "inlined"
+            continue
+
+        previous_status = entry.get("status")
+        original_suffix = Path(str(entry.get("original_file", ""))).suffix.lower()
+        target_suffix = Path(target).suffix.lower()
+        entry["final_file"] = target
+        if not (images_dir / target).is_file():
+            entry["status"] = "missing"
+        elif target_suffix == ".svg" and original_suffix != ".svg":
+            entry["status"] = "vectorized"
+        elif previous_status == "deduped":
+            entry["status"] = "deduped"
+        else:
+            entry["status"] = "kept"
 
 
 def is_url(value: str) -> bool:
@@ -460,30 +689,42 @@ def convert(source: Path, output_dir: Path, ocr: bool, force: bool,
     source_copy = output_dir / f"{stem}{suffix}"
     out_md = output_dir / f"{stem}.md"
     images_dir = output_dir / f"{stem}.images"
+    image_map_path = output_dir / f"{stem}.image-map.json"
 
-    if not force and (out_md.exists() or images_dir.exists()):
+    existing_outputs = [path for path in (out_md, images_dir, image_map_path) if path.exists()]
+    if not force and existing_outputs:
         raise SystemExit(
             f"Error: output exists (use --force to overwrite): "
-            f"{out_md if out_md.exists() else images_dir}"
+            f"{existing_outputs[0]}"
         )
     if force and images_dir.exists():
         shutil.rmtree(images_dir)
+    if force and image_map_path.exists():
+        image_map_path.unlink()
 
     # Copy the original source into the output directory.
     if source.resolve() != source_copy.resolve():
         shutil.copy2(source, source_copy)
 
     # Convert in a temp dir so the intermediate base64 markdown is discarded.
+    image_entries: list[dict] = []
     tmp_dir = Path(tempfile.mkdtemp(prefix="pdf2markdown_"))
     try:
-        embedded_md = run_docling(source, tmp_dir, ocr)
-        count = split_images(embedded_md, out_md, images_dir)
+        embedded_md, docling_metadata = run_docling(source, tmp_dir, ocr)
+        count = split_images(
+            embedded_md,
+            out_md,
+            images_dir,
+            image_entries=image_entries,
+            docling_metadata=docling_metadata,
+        )
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     stats = {"dedupe": {}, "postprocess": {}}
     if count:
         stats["dedupe"] = deduplicate_images(out_md, images_dir.name)
+        update_image_map_for_dedupe(image_entries, stats["dedupe"])
 
     if postprocess and count:
         import image_postprocess
@@ -496,6 +737,15 @@ def convert(source: Path, output_dir: Path, ocr: bool, force: bool,
     md_text = _normalize_math(out_md.read_text(encoding="utf-8"))
     md_text = _standardize_subscripts(md_text)
     out_md.write_text(md_text, encoding="utf-8")
+
+    update_image_map_from_markdown(image_entries, out_md, images_dir.name)
+    write_image_map(image_map_path, {
+        "version": 1,
+        "source": source_copy.name,
+        "markdown": out_md.name,
+        "images_dir": images_dir.name,
+        "entries": image_entries,
+    })
 
     return source_copy, out_md, count, stats
 
@@ -511,7 +761,7 @@ def main() -> int:
     parser.add_argument("output_dir", type=Path, metavar="output_dir", nargs="?",
                         help="Directory for the PDF copy, images, and .md output (default: PDF's directory)")
     parser.add_argument("-f", "--force", action="store_true",
-                        help="Overwrite existing .md / .images output")
+                        help="Overwrite existing .md / .images / image-map output")
     parser.add_argument("--no-ocr", dest="ocr", action="store_false",
                         help="Skip OCR during docling conversion")
     parser.add_argument("--no-postprocess", dest="postprocess", action="store_false",
@@ -556,6 +806,7 @@ def main() -> int:
     print("\nDone")
     print(f"  Source   : {source_copy}")
     print(f"  Markdown : {out_md}")
+    print(f"  Image map: {out_md.parent / (out_md.stem + '.image-map.json')}")
     print(f"  Images   : {count} extracted, {remaining} kept in {images_dir}/")
     if equation_count:
         print(f"  Equations: {equation_count} formula(s) -> LaTeX")
