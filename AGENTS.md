@@ -22,6 +22,8 @@ Use Python 3 style with 4-space indentation, descriptive `snake_case` names for 
 
 Tests use `pytest`. Name test files `test_*.py` and test functions `test_*`. Add focused tests for URL routing, vendor source behavior, image deduplication, and conversion command construction when changing those areas. Mark slow or end-to-end cases with the existing `slow` or `e2e` markers. Network-dependent coverage should remain opt-in and isolated from the default fast suite.
 
+Tests marked `known_defect` reproduce conversion defects observed on real datasheets. They assert the **correct** behavior, so they fail until the converter is fixed; the default suite auto-skips them. Run the red list with `pytest --known-defects -m "known_defect and not slow"` (fast) or `pytest --known-defects -m known_defect` (including e2e). When a defect is fixed, its test turns green: remove the `known_defect` marker so it becomes a permanent regression guard. Each test's docstring describes the symptom and where it was observed.
+
 ## Commit & Pull Request Guidelines
 
 Use commit messages that help reviewers understand the observable effect of the change without inventing unsupported context.
@@ -82,6 +84,7 @@ Mention tests, documentation updates, setup commands, screenshots, manual checks
 
 Do not invent test results, claim verification that was not done, or imply that documentation was updated when it was not.
 
+Do not append "Claude Session:" lines, since other people besides me are reading the commits as well and they might not be interested in links they don't get to open.
 
 Pull requests should describe the user-visible change, list tests run, and call out network, OCR, or docling behavior changes. Include sample input URLs or files when changing vendor datasheet handling or output formatting.
 
