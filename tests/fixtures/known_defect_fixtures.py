@@ -14,7 +14,7 @@ lazily so callers can ``pytest.skip`` when it is unavailable.
 
 import base64
 from pathlib import Path
-from typing import List, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 from tests.fixtures.generate_duplicate_fixture import make_png
 
@@ -136,20 +136,28 @@ REGISTER_TABLE_ROWS: List[Tuple[str, str, str, str, str, List[str]]] = [
 ]
 
 
-def write_register_description_pdf(path: Path, *, ruled_rows: bool = True) -> None:
+def write_register_description_pdf(
+    path: Path,
+    *,
+    ruled_rows: bool = True,
+    font_size: float = 7,
+    leading: float = 9,
+    col_edges: Optional[Sequence[float]] = None,
+) -> None:
     """A wide register-description table where adjacent bit-field rows carry
     multi-line enumerated values — the layout whose rows get merged (and whose
     wrapped value lines get lost) during conversion. ``ruled_rows=False``
     omits the horizontal separators between data rows (only the frame and the
-    header rule remain), as many datasheet tables do."""
+    header rule remain), as many datasheet tables do. ``font_size``/``leading``
+    /``col_edges`` are extraction-envelope sweep knobs; the defaults reproduce
+    the original layout."""
     from reportlab.lib.pagesizes import letter
     from reportlab.pdfgen import canvas
 
     c = canvas.Canvas(str(path), pagesize=letter)
     width, height = letter
-    font_size, leading = 7, 9
     # Column left edges; last value is the table's right edge.
-    cols = [40, 110, 152, 250, 300, 340, 570]
+    cols = list(col_edges) if col_edges is not None else [40, 110, 152, 250, 300, 340, 570]
     headers = ["Register", "Bit", "Name", "Default", "R/W", "Description"]
 
     c.setFont("Helvetica-Bold", 10)

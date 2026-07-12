@@ -35,3 +35,15 @@ def artifact_dir(request, tmp_path: Path) -> Path:
     out = Path(keep) / safe
     out.mkdir(parents=True, exist_ok=True)
     return out
+
+
+@pytest.fixture(scope="module")
+def module_artifact_dir(request, tmp_path_factory) -> Path:
+    """Per-module artifact dir for tests sharing one expensive conversion."""
+    keep = request.config.getoption("--keep-artifacts")
+    safe = request.module.__name__.replace(".", "__")
+    if keep is None:
+        return tmp_path_factory.mktemp(safe)
+    out = Path(keep) / safe
+    out.mkdir(parents=True, exist_ok=True)
+    return out

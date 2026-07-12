@@ -24,24 +24,13 @@ from pathlib import Path
 
 import pytest
 
+from tests.e2e_helpers import convert_pdf_for_tests
+
 pytestmark = [pytest.mark.e2e, pytest.mark.slow, pytest.mark.known_defect]
 
 
-def _convert_pdf(pdf: Path, out_dir: Path, monkeypatch) -> str:
-    try:
-        import docling  # noqa: F401
-    except ModuleNotFoundError:
-        pytest.skip("docling is not installed")
-    import pdf2markdown
-    import unimernet_formula
-
-    # The synthetic pages contain no formulas; make sure a stray FORMULA
-    # detection can never pull in the large recognizer model.
-    monkeypatch.setattr(unimernet_formula, "recognize", lambda img: "")
-
-    _, out_md, _, _ = pdf2markdown.convert(
-        pdf, out_dir, ocr=False, force=False, postprocess=False,
-    )
+def _convert_pdf(pdf: Path, out_dir: Path) -> str:
+    out_md, _ = convert_pdf_for_tests(pdf, out_dir)
     return out_md.read_text(encoding="utf-8")
 
 
@@ -52,7 +41,7 @@ def _write_pdf(builder, path: Path, **kwargs):
         pytest.skip(f"fixture dependency unavailable: {exc.name}")
 
 
-def test_wide_register_bitfield_rows_not_merged(artifact_dir: Path, monkeypatch):
+def test_wide_register_bitfield_rows_not_merged(artifact_dir: Path):
     """In a wide register-description table without inner row rules (a common
     datasheet style), adjacent bit-field rows must stay separate rows with
     their enumerated-value lines. Extraction merges and scrambles them: names
@@ -63,7 +52,7 @@ def test_wide_register_bitfield_rows_not_merged(artifact_dir: Path, monkeypatch)
     pdf = artifact_dir / "register_description.pdf"
     _write_pdf(write_register_description_pdf, pdf, ruled_rows=False)
 
-    text = _convert_pdf(pdf, artifact_dir / "out", monkeypatch)
+    text = _convert_pdf(pdf, artifact_dir / "out")
 
     rows = [line for line in text.splitlines() if line.startswith("|")]
     for bit, name in [
@@ -82,7 +71,7 @@ def test_wide_register_bitfield_rows_not_merged(artifact_dir: Path, monkeypatch)
     assert "'3'b100 - 2-exposure linearize" in text
 
 
-def test_bold_table_caption_not_promoted_to_heading(artifact_dir: Path, monkeypatch):
+def test_bold_table_caption_not_promoted_to_heading(artifact_dir: Path):
     """A bold standalone ``Table N.`` caption above a table must stay caption
     text, not become a document heading."""
     from tests.fixtures.known_defect_fixtures import write_caption_table_pdf
@@ -90,7 +79,7 @@ def test_bold_table_caption_not_promoted_to_heading(artifact_dir: Path, monkeypa
     pdf = artifact_dir / "caption_table.pdf"
     _write_pdf(write_caption_table_pdf, pdf)
 
-    text = _convert_pdf(pdf, artifact_dir / "out", monkeypatch)
+    text = _convert_pdf(pdf, artifact_dir / "out")
 
     assert re.search(r"(?m)^#{1,6}\s+Table \d+\.", text) is None, (
         "table caption was promoted to a heading"
