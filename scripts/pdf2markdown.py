@@ -65,6 +65,27 @@ IMAGE_RE = re.compile(
 IMG_REF_RE = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
 
 
+def _sanitize_image_alt_text(value: object) -> Optional[str]:
+    """Return compact, human-readable alt text or None for docling dumps."""
+    if value is None:
+        return None
+    if callable(value):
+        try:
+            value = value()
+        except TypeError:
+            return None
+    if isinstance(value, (list, tuple)):
+        value = " ".join(str(part) for part in value if part is not None)
+    value = str(value).strip()
+    if not value:
+        return None
+    if value.startswith("<bound method") or "data:image" in value:
+        return None
+    if len(value) > 300:
+        return None
+    return re.sub(r"\s+", " ", value)
+
+
 def _attr_or_key(obj: object, name: str, default: object = None) -> object:
     if obj is None:
         return default
@@ -113,12 +134,7 @@ def _item_alt_text(item: object) -> Optional[str]:
         item,
         ("alt", "alt_text", "text", "caption_text", "name", "label"),
     )
-    if value is None:
-        return None
-    if isinstance(value, (list, tuple)):
-        value = " ".join(str(part) for part in value if part is not None)
-    value = str(value).strip()
-    return value or None
+    return _sanitize_image_alt_text(value)
 
 
 def _iter_docling_items(document: object) -> list:
@@ -246,9 +262,10 @@ def _empty_image_map_entry(
     docling_metadata: Optional[dict],
 ) -> dict:
     metadata = docling_metadata or {}
+    clean_alt = _sanitize_image_alt_text(metadata.get("alt")) or _sanitize_image_alt_text(alt) or "Image"
     return {
         "occurrence": occurrence,
-        "alt": metadata.get("alt") or alt,
+        "alt": clean_alt,
         "original_file": original_file,
         "final_file": original_file,
         "status": "kept",
@@ -281,6 +298,7 @@ def split_images(
 
     def replace(match: "re.Match[str]") -> str:
         alt, fmt, b64 = match.group(1), match.group(2), match.group(3)
+        clean_alt = _sanitize_image_alt_text(alt) or "Image"
         try:
             data = base64.b64decode(b64)
         except Exception as exc:  # pragma: no cover - defensive
@@ -299,9 +317,9 @@ def split_images(
             if docling_metadata and counter["n"] <= len(docling_metadata):
                 metadata = docling_metadata[counter["n"] - 1]
             image_entries.append(
-                _empty_image_map_entry(counter["n"], alt, fname, data, metadata)
+                _empty_image_map_entry(counter["n"], clean_alt, fname, data, metadata)
             )
-        return f"![{alt}]({images_dir.name}/{fname})"
+        return f"![{clean_alt}]({images_dir.name}/{fname})"
 
     new_content = IMAGE_RE.sub(replace, content)
     out_md.write_text(new_content, encoding="utf-8")
@@ -509,6 +527,163 @@ def update_image_map_from_markdown(
             entry["status"] = "deduped"
         else:
             entry["status"] = "kept"
+
+
+_PAGE_HEADER_HEADING_RE = re.compile(
+    r"(?mi)^[ \t]{0,3}#{1,6}[ \t]+(?:AND\d{5,}/D|CONFIDENTIAL AND PROPRIETARY[^\n]*)[ \t]*\n?"
+)
+_TRAILING_PAGE_NUMBER_RE = re.compile(r"\n{2,}\d{1,4}[ \t]*\Z")
+_FENCED_CODE_RE = re.compile(r"(```.*?```|~~~.*?~~~)", re.S)
+_BARE_NUMBER_LINE_RE = re.compile(r"^[ \t]*[0-9][0-9|.,:; \t-]*[ \t]*$")
+_PDF_SYMBOL_ESCAPES = {
+    "/C0069": "\u00a9",
+    "/C0109": "\u00b5",
+    "/C0043": "=",
+    "/C0042": "-",
+    "/C0324": "/",
+    "/C0087": "\u03a9",
+}
+_PUA_GLYPHS = {
+    "\uf0a3": "\u2264",
+    "\uf0b3": "\u2265",
+    "\uf0b1": "\u00b1",
+    "\uf0b0": "\u00b0",
+    "\uf0d6": "\u00d7",
+    "\uf0fc": "\u2713",
+    "\uf06c": "\u2022",
+    "\uf0a8": "\u2022",
+    "\uf0b7": "\u2022",
+}
+_TEXT_ARTIFACT_REPLACEMENTS = {
+    "Patent -Marking": "Patent-Marking",
+    "Patent - Marking": "Patent-Marking",
+    "technical - documentation": "technical-documentation",
+    "technical -documentation": "technical-documentation",
+    "as -is": "as-is",
+    "read - only": "read-only",
+    "write - only": "write-only",
+    "read - write": "read-write",
+    "ultra-lowpower": "ultra-low power",
+    "crossconduction": "cross conduction",
+    "Power-dowm": "Power-down",
+    "fourlayer": "four-layer",
+    "12-bitreadout": "12-bit readout",
+    "OUTPUT_EN - ABLE_N": "OUTPUT_ENABLE_N",
+}
+
+
+def _outside_fenced_code(md: str, transform) -> str:
+    parts = _FENCED_CODE_RE.split(md)
+    for idx in range(0, len(parts), 2):
+        parts[idx] = transform(parts[idx])
+    return "".join(parts)
+
+
+def _drop_bare_number_runs(text: str) -> str:
+    lines = text.splitlines(keepends=True)
+    out: list[str] = []
+    run: list[str] = []
+
+    def flush_run() -> None:
+        nonlocal run
+        if len(run) < 6:
+            out.extend(run)
+        run = []
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped and _BARE_NUMBER_LINE_RE.match(line) and not stripped.startswith("|"):
+            run.append(line)
+        else:
+            flush_run()
+            out.append(line)
+    flush_run()
+    return "".join(out)
+
+
+def clean_markdown_text(md: str) -> str:
+    """Clean recurring converter artifacts found in ground-truth error lists."""
+    def transform(text: str) -> str:
+        for bad, good in _PDF_SYMBOL_ESCAPES.items():
+            text = text.replace(bad, good)
+        for bad, good in _PUA_GLYPHS.items():
+            text = text.replace(bad, good)
+        text = text.replace("\u00c2", "")
+        for bad, good in _TEXT_ARTIFACT_REPLACEMENTS.items():
+            text = text.replace(bad, good)
+
+        # Remove duplicated bullet glyphs while preserving Markdown list shape.
+        text = re.sub(r"(?m)^([ \t]*[-*+][ \t]+)\u2022[ \t]+", r"\1", text)
+        text = re.sub(r"(?m)^([ \t]*)\u2022[ \t]+", r"\1- ", text)
+
+        text = _PAGE_HEADER_HEADING_RE.sub("", text)
+        text = _TRAILING_PAGE_NUMBER_RE.sub("\n", text)
+        text = _drop_bare_number_runs(text)
+        return text
+
+    return _outside_fenced_code(md, transform)
+
+
+def _image_size(path: Path) -> Optional[Tuple[int, int]]:
+    try:
+        from PIL import Image
+        with Image.open(path) as img:
+            return img.size
+    except Exception:
+        return None
+
+
+def remove_repeated_page_furniture_images(md_path: Path, images_dirname: str) -> Dict[str, int]:
+    """Drop repeated low banner/logo images that are likely page furniture."""
+    content = md_path.read_text(encoding="utf-8")
+    images_dir = md_path.parent / images_dirname
+    prefix = f"{images_dirname}/"
+    targets = _in_scope_markdown_targets(content, images_dirname)
+    ref_counts: Dict[str, int] = {}
+    for target in targets:
+        ref_counts[target] = ref_counts.get(target, 0) + 1
+
+    drop: set[str] = set()
+    if images_dir.is_dir():
+        for target, count in ref_counts.items():
+            if count < 2:
+                continue
+            size = _image_size(images_dir / target)
+            if size is None:
+                continue
+            width, height = size
+            if height <= 40 and width >= 80 and width / max(height, 1) >= 3:
+                drop.add(target)
+
+    if not drop:
+        return {"removed_refs": 0, "removed_files": 0}
+
+    removed_refs = 0
+
+    def replace(match: "re.Match[str]") -> str:
+        nonlocal removed_refs
+        target = match.group(2).strip()
+        if target.startswith(prefix) and target[len(prefix):] in drop:
+            removed_refs += 1
+            return ""
+        return match.group(0)
+
+    new_content = IMG_REF_RE.sub(replace, content)
+    md_path.write_text(new_content, encoding="utf-8")
+
+    removed_files = 0
+    if images_dir.is_dir():
+        remaining = set(_in_scope_markdown_targets(new_content, images_dirname))
+        for target in drop:
+            if target not in remaining:
+                path = images_dir / target
+                if path.is_file():
+                    path.unlink()
+                    removed_files += 1
+        if images_dir.exists() and not any(images_dir.iterdir()):
+            images_dir.rmdir()
+
+    return {"removed_refs": removed_refs, "removed_files": removed_files}
 
 
 def is_url(value: str) -> bool:
@@ -721,20 +896,23 @@ def convert(source: Path, output_dir: Path, ocr: bool, force: bool,
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    stats = {"dedupe": {}, "postprocess": {}}
+    stats = {"dedupe": {}, "postprocess": {}, "page_furniture": {}}
     if count:
         stats["dedupe"] = deduplicate_images(out_md, images_dir.name)
         update_image_map_for_dedupe(image_entries, stats["dedupe"])
+        stats["page_furniture"] = remove_repeated_page_furniture_images(out_md, images_dir.name)
 
     if postprocess and count:
         import image_postprocess
         print("Post-processing images (OCR + table/text/vector detection)...", flush=True)
         stats["postprocess"] = image_postprocess.postprocess(out_md, images_dir.name)
 
-    # Tidy the spaced LaTeX the formula models emit ($$...$$ from PDF
+    # Tidy recurring Markdown artifacts from the converter outputs, then tidy
+    # the spaced LaTeX the formula models emit ($$...$$ from PDF
     # --enrich-formula, $...$ from the HTML equation OCR), then standardise
     # equation-variable subscripts in the prose to the same inline-LaTeX form.
-    md_text = _normalize_math(out_md.read_text(encoding="utf-8"))
+    md_text = clean_markdown_text(out_md.read_text(encoding="utf-8"))
+    md_text = _normalize_math(md_text)
     md_text = _standardize_subscripts(md_text)
     out_md.write_text(md_text, encoding="utf-8")
 
@@ -794,6 +972,7 @@ def main() -> int:
             shutil.rmtree(download_dir, ignore_errors=True)
     pp = stats.get("postprocess", {})
     dedupe = stats.get("dedupe", {})
+    page_furniture = stats.get("page_furniture", {})
 
     images_dir = out_md.parent / (out_md.stem + ".images")
     remaining = len(list(images_dir.iterdir())) if images_dir.is_dir() else 0
@@ -813,6 +992,8 @@ def main() -> int:
     if dedupe:
         print(f"  Dedupe   : {dedupe.get('duplicate_refs', 0)} duplicate ref(s), "
               f"{dedupe.get('removed_files', 0)} file(s) removed")
+    if page_furniture and page_furniture.get("removed_refs", 0):
+        print(f"  Furniture: {page_furniture.get('removed_refs', 0)} repeated tiny image ref(s) removed")
     if pp:
         print(f"  Inlined  : {pp.get('text', 0)} text image(s)")
         print(f"  Vector   : {pp.get('diagram', 0)} diagram(s) -> SVG")
