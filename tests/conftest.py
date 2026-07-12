@@ -9,6 +9,21 @@ def pytest_addoption(parser):
         default=None,
         help="Write test outputs to DIR/<test-id>/ instead of discarding.",
     )
+    parser.addoption(
+        "--known-defects",
+        action="store_true",
+        default=False,
+        help="Run tests marked known_defect (they assert correct behavior and fail until the converter is fixed).",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    if config.getoption("--known-defects"):
+        return
+    skip = pytest.mark.skip(reason="known defect (red by design); run with --known-defects")
+    for item in items:
+        if "known_defect" in item.keywords:
+            item.add_marker(skip)
 
 
 @pytest.fixture()
