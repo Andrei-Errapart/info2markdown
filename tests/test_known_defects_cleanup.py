@@ -118,10 +118,10 @@ def test_page_footer_document_code_lines_removed():
     assert "The standby controller gates unused domains." in out
 
 
-@pytest.mark.known_defect
 def test_table_caption_heading_demoted():
-    """``Table N.`` captions promoted to ``##`` headings must be demoted to
-    plain caption text (most captions in the same document stay plain)."""
+    """Regression guard (was a known defect): ``Table N.`` captions promoted to
+    ``##`` headings must be demoted to plain caption text (most captions in the
+    same document stay plain)."""
     md = (
         "The trigger subsystem supports the modes below.\n"
         "\n"

@@ -532,6 +532,12 @@ def update_image_map_from_markdown(
 _PAGE_HEADER_HEADING_RE = re.compile(
     r"(?mi)^[ \t]{0,3}#{1,6}[ \t]+(?:AND\d{5,}/D|CONFIDENTIAL AND PROPRIETARY[^\n]*)[ \t]*\n?"
 )
+# A ``Table N.`` caption docling promoted to a ``#`` heading (bold standalone
+# captions above ruled tables get mis-detected as headings). Demote to plain caption
+# text -- most captions in the same document stay plain, so the heading form is the
+# artifact. Only the ``#`` markers are dropped; the caption text is kept. The digit
+# guard keeps real headings like ``## Table of Contents`` untouched.
+_CAPTION_HEADING_RE = re.compile(r"(?m)^[ \t]{0,3}#{1,6}[ \t]+(Table[ \t]+\d+\.[^\n]*)$")
 _TRAILING_PAGE_NUMBER_RE = re.compile(r"\n{2,}\d{1,4}[ \t]*\Z")
 _FENCED_CODE_RE = re.compile(r"(```.*?```|~~~.*?~~~)", re.S)
 _BARE_NUMBER_LINE_RE = re.compile(r"^[ \t]*[0-9][0-9|.,:; \t-]*[ \t]*$")
@@ -617,6 +623,7 @@ def clean_markdown_text(md: str) -> str:
         text = re.sub(r"(?m)^([ \t]*)\u2022[ \t]+", r"\1- ", text)
 
         text = _PAGE_HEADER_HEADING_RE.sub("", text)
+        text = _CAPTION_HEADING_RE.sub(r"\1", text)
         text = _TRAILING_PAGE_NUMBER_RE.sub("\n", text)
         text = _drop_bare_number_runs(text)
         return text

@@ -1,5 +1,6 @@
 import base64
 import json
+import re
 from pathlib import Path
 
 import pdf2markdown
@@ -62,6 +63,25 @@ def test_clean_markdown_text_removes_common_ground_truth_artifacts() -> None:
     assert "technical-documentation" in out
     assert "as-is" in out
     assert not out.rstrip().endswith("61")
+
+
+def test_clean_markdown_text_demotes_table_caption_headings() -> None:
+    md = "\n".join([
+        "## Table 5. TRIGGER MODES",
+        "### Table 4.2  DC Characteristics (1/2)",
+        "## Table of Contents",
+        "## THERMAL CHARACTERISTICS",
+    ])
+
+    out = clean_markdown_text(md)
+
+    # ``Table N.`` captions lose their heading markers but keep the caption text
+    assert "\n".join(["Table 5. TRIGGER MODES",
+                      "Table 4.2  DC Characteristics (1/2)"]) in out
+    assert re.search(r"(?m)^#{1,6}\s+Table \d+\.", out) is None
+    # real headings (no ``Table N.`` caption shape) are left untouched
+    assert "## Table of Contents" in out
+    assert "## THERMAL CHARACTERISTICS" in out
 
 
 def test_clean_markdown_text_keeps_fenced_code_verbatim() -> None:
