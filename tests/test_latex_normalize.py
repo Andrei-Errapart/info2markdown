@@ -53,3 +53,14 @@ def test_normalize_math_strips_mathsf_and_number_thinspace():
             == r"$$V_{TH}=12$$")
     assert _normalize_math(r"$$x=84.4\,\upmu H$$") == r"$$x=84.4\,\upmu H$$"
     assert _normalize_math(r"$$y=41\,0$$") == r"$$y=410$$"
+
+
+def test_normalize_math_unwraps_single_cell_array():
+    # a lone equation boxed in a one-cell array is scaffolding -> unwrap it
+    assert (_normalize_math(r"$$\begin{array} { c } { R _ { \theta J A } = 6 2 } \end{array}$$")
+            == r"$$R_{\theta JA}=62$$")
+    assert (_normalize_math(r"text $\begin{array}{c}{x=1}\end{array}$ more")
+            == r"text $x=1$ more")
+    # a genuine multi-row / multi-column array is a real table -> left intact
+    assert (_normalize_math(r"$$\begin{array}{cc} a & b \\ c & d \end{array}$$")
+            == r"$$\begin{array}{cc}a&b\\c&d\end{array}$$")

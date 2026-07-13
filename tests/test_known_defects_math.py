@@ -34,11 +34,10 @@ def test_upgreek_command_normalized():
     assert "\\rho" in out
 
 
-@pytest.mark.known_defect
 def test_single_cell_array_scaffolding_unwrapped():
-    """The formula OCR wraps some single equations in a one-cell
-    ``\\begin{array}`` environment; the scaffolding must be unwrapped so the
-    plain equation remains."""
+    """Regression guard (was a known defect): the formula OCR wraps some single
+    equations in a one-cell ``\\begin{array}`` environment; the scaffolding must
+    be unwrapped so the plain equation remains."""
     md = "$$\\begin{array} { c } { R _ { \\theta J A } = 6 2 } \\end{array}$$\n"
 
     out = run_text_pipeline(md)

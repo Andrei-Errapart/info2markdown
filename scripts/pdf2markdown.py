@@ -786,6 +786,54 @@ def _strip_font_commands(latex: str) -> str:
     return latex
 
 
+# UniMERNet sometimes wraps a lone equation in a one-cell ``\begin{array}{c}{...}``
+# environment -- scaffolding, not a real table -- so the equation renders boxed and
+# reads differently from its unwrapped siblings. Unwrap it to the bare cell. A real
+# multi-row (``\\``) or multi-column (top-level ``&``) array is a genuine table and is
+# kept as-is. Runs on the space-collapsed LaTeX (_normalize_latex ran first).
+_ARRAY_WRAP_RE = re.compile(r"^\s*\\begin\{array\}\{[^{}]*\}(.*)\\end\{array\}\s*$", re.S)
+
+
+def _has_top_level_char(s: str, ch: str) -> bool:
+    """True if ``ch`` occurs in ``s`` outside every ``{...}`` group."""
+    depth = 0
+    for c in s:
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+        elif c == ch and depth == 0:
+            return True
+    return False
+
+
+def _strip_wrapping_braces(s: str) -> str:
+    """Strip one outer ``{...}`` group iff it brackets the whole string."""
+    if not (s.startswith("{") and s.endswith("}")):
+        return s
+    depth = 0
+    for i, c in enumerate(s):
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return s[1:-1].strip() if i == len(s) - 1 else s
+    return s
+
+
+def _unwrap_single_cell_array(latex: str) -> str:
+    r"""Unwrap a single-cell ``\begin{array}{c}{...}\end{array}`` wrapper to its
+    content, leaving genuine multi-cell arrays (row/column separators) untouched."""
+    m = _ARRAY_WRAP_RE.match(latex)
+    if not m:
+        return latex
+    body = m.group(1).strip()
+    if "\\\\" in body or "\\begin{array}" in body or _has_top_level_char(body, "&"):
+        return latex
+    return _strip_wrapping_braces(body)
+
+
 def _normalize_math(md: str) -> str:
     """Normalise the LaTeX inside every ``$$...$$`` and ``$...$`` span (only
     spans that look like math, to leave a stray ``$`` in prose alone)."""
@@ -793,6 +841,7 @@ def _normalize_math(md: str) -> str:
         if not re.search(r"[\\_^{}]", inner):
             return inner
         inner = _normalize_latex(inner)
+        inner = _unwrap_single_cell_array(inner)
         inner = _strip_font_commands(inner)
         return _THIN_SPACE_IN_NUMBER_RE.sub("", inner)
     md = re.sub(r"\$\$(.+?)\$\$", lambda m: f"$${norm(m.group(1))}$$", md, flags=re.S)
