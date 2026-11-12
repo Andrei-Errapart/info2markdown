@@ -51,7 +51,7 @@ def _split_name(index: int, data: bytes) -> str:
 
 
 def _canonical_name(data: bytes) -> str:
-    return f"{hashlib.sha256(data).hexdigest()}.png"
+    return f"{hashlib.sha256(data).hexdigest()[:16]}.png"
 
 
 def build_fixture(seed: int = DEFAULT_SEED) -> Dict[str, object]:

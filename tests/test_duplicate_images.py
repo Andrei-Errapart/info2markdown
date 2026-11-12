@@ -72,7 +72,7 @@ def test_dedupe_updates_image_map_but_keeps_duplicate_occurrences(tmp_path: Path
     stats = deduplicate_images(out_md, images_dir.name)
     update_image_map_for_dedupe(entries, stats)
 
-    canonical = f"{hashlib.sha256(data).hexdigest()}.png"
+    canonical = f"{hashlib.sha256(data).hexdigest()[:16]}.png"
     assert [entry["occurrence"] for entry in entries] == [1, 2]
     assert [entry["final_file"] for entry in entries] == [canonical, canonical]
     assert [entry["status"] for entry in entries] == ["kept", "deduped"]
@@ -200,7 +200,7 @@ def test_split_images_then_dedupe_matches_generated_expected_markdown(tmp_path: 
     assert stats["duplicate_groups"] == manifest["duplicate_groups"]
 
     for image_path in images_dir.iterdir():
-        assert image_path.stem == sha256(image_path)
+        assert image_path.stem == sha256(image_path)[:16]
 
 
 def test_dedupe_canonicalizes_unique_images_without_removing_files(tmp_path: Path) -> None:
@@ -240,12 +240,58 @@ def test_dedupe_rewrites_duplicate_refs_and_removes_duplicate_files(tmp_path: Pa
     )
 
     stats = deduplicate_images(md_path, images_dir.name)
-    canonical = f"{hashlib.sha256(data).hexdigest()}.png"
+    canonical = f"{hashlib.sha256(data).hexdigest()[:16]}.png"
 
     assert stats["duplicate_refs"] == 1
     assert stats["removed_files"] == 1
     assert [p.name for p in images_dir.iterdir()] == [canonical]
     assert md_path.read_text(encoding="utf-8").count(f"doc.images/{canonical}") == 2
+
+
+def test_canonical_image_name_is_first_16_hex_digits(tmp_path: Path) -> None:
+    images_dir = tmp_path / "doc.images"
+    images_dir.mkdir()
+    data = make_png(8, 8, [(1, 2, 3), (200, 200, 200)])
+    (images_dir / "image_001_a.png").write_bytes(data)
+    md_path = tmp_path / "doc.md"
+    md_path.write_text("![one](doc.images/image_001_a.png)\n", encoding="utf-8")
+
+    deduplicate_images(md_path, images_dir.name)
+
+    expected = hashlib.sha256(data).hexdigest()[:16] + ".png"
+    assert [p.name for p in images_dir.iterdir()] == [expected]
+    assert md_path.read_text(encoding="utf-8") == f"![one](doc.images/{expected})\n"
+
+
+def test_dedupe_falls_back_to_full_digest_on_prefix_collision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    images_dir = tmp_path / "doc.images"
+    images_dir.mkdir()
+    a = make_png(8, 8, [(1, 2, 3), (200, 200, 200)])
+    b = make_png(8, 8, [(9, 9, 9), (100, 100, 100)])
+    (images_dir / "image_001_a.png").write_bytes(a)
+    (images_dir / "image_002_b.png").write_bytes(b)
+    md_path = tmp_path / "doc.md"
+    md_path.write_text(
+        "![a](doc.images/image_001_a.png)\n![b](doc.images/image_002_b.png)\n",
+        encoding="utf-8",
+    )
+    # Two different images whose digests share the first 16 hex digits.
+    fake = {a: "0123456789abcdef" + "1" * 48, b: "0123456789abcdef" + "2" * 48}
+    import pdf2markdown
+    monkeypatch.setattr(pdf2markdown, "image_content_hash", lambda path: fake[path.read_bytes()])
+
+    deduplicate_images(md_path, images_dir.name)
+
+    names = sorted(p.name for p in images_dir.iterdir())
+    assert names == ["0123456789abcdef.png", "0123456789abcdef" + "2" * 48 + ".png"]
+    assert (images_dir / "0123456789abcdef.png").read_bytes() == a
+    assert (images_dir / names[1]).read_bytes() == b
+    assert md_path.read_text(encoding="utf-8") == (
+        "![a](doc.images/0123456789abcdef.png)\n"
+        f"![b](doc.images/{names[1]})\n"
+    )
 
 
 def test_dedupe_leaves_external_and_missing_refs_unchanged(tmp_path: Path) -> None:

@@ -57,9 +57,11 @@ upstream source of truth if this logic needs updating.
   `run_docling_html` (HTML), each serialising to base64-embedded Markdown.
   Pipeline: copy the source → convert with docling into a **temp dir** →
   `split_images()` decodes the base64 data-URIs into `<stem>.images/` and rewrites
-  the links → exact duplicate images are canonicalized to SHA-256 filenames → hand
-  off to post-processing. The intermediate base64 markdown is discarded; it never
-  lands in the output dir.
+  the links → exact duplicate images are canonicalized to filenames made of the
+  first 16 hex digits of their SHA-256 (`IMAGE_NAME_HEX_DIGITS`; the full digest
+  only if two images in one dir would share a name — short names keep deep
+  output paths under Windows' MAX_PATH) → hand off to post-processing. The
+  intermediate base64 markdown is discarded; it never lands in the output dir.
   - The PDF route (`run_docling_pdf`) builds its converter with
     `unimernet_formula.build_pdf_converter`, whose custom pipeline OCRs each
     detected formula region with **UniMERNet-base** instead of docling's
