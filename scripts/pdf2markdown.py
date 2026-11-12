@@ -63,6 +63,9 @@ IMAGE_RE = re.compile(
 
 # Matches a Markdown image: ![alt](target)
 IMG_REF_RE = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
+# Canonical image files are named by this many leading hex digits of their
+# SHA-256 (64 bits), keeping deep output paths under Windows' MAX_PATH.
+IMAGE_NAME_HEX_DIGITS = 16
 
 
 def _sanitize_image_alt_text(value: object) -> Optional[str]:
@@ -344,7 +347,9 @@ def image_content_hash(image_path: Path) -> str:
 def deduplicate_images(md_path: Path, images_dirname: str) -> Dict[str, object]:
     """Canonicalize exact duplicate extracted images and rewrite Markdown refs.
 
-    Exact-byte duplicates are collapsed to one SHA-256-named file. The helper
+    Exact-byte duplicates are collapsed to one file named by the first
+    IMAGE_NAME_HEX_DIGITS hex digits of its SHA-256 (the full digest if two
+    different images would share that name). The helper
     boundary is intentionally content-hash based so perceptual dedupe can be
     layered in later without changing callers.
     """
@@ -365,6 +370,7 @@ def deduplicate_images(md_path: Path, images_dirname: str) -> Dict[str, object]:
     }
 
     canonical_by_digest: Dict[str, str] = {}
+    digest_by_canonical: Dict[str, str] = {}
     canonical_by_original: Dict[str, str] = {}
     duplicate_groups: Dict[str, list] = {}
 
@@ -393,10 +399,15 @@ def deduplicate_images(md_path: Path, images_dirname: str) -> Dict[str, object]:
 
         digest = image_content_hash(image_path)
         suffix = image_path.suffix.lower() or ".img"
-        seen_digest = digest in canonical_by_digest
-        canonical_name = canonical_by_digest.setdefault(digest, f"{digest}{suffix}")
-        if seen_digest:
+        if digest in canonical_by_digest:
             stats["duplicate_refs"] = int(stats["duplicate_refs"]) + 1
+        else:
+            name = f"{digest[:IMAGE_NAME_HEX_DIGITS]}{suffix}"
+            if digest_by_canonical.get(name, digest) != digest:
+                name = f"{digest}{suffix}"  # short-name collision: full digest
+            canonical_by_digest[digest] = name
+            digest_by_canonical[name] = digest
+        canonical_name = canonical_by_digest[digest]
 
         canonical_by_original[rel_name] = canonical_name
         duplicate_groups.setdefault(canonical_name, []).append(rel_name)
