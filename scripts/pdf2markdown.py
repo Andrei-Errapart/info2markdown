@@ -870,9 +870,10 @@ def convert(source: Path, output_dir: Path, ocr: bool, force: bool,
         raise SystemExit(f"Error: expected a .pdf or .html file, got: {source}")
 
     stem = source.stem
-    suffix = source.suffix.lower()
     output_dir.mkdir(parents=True, exist_ok=True)
-    source_copy = output_dir / f"{stem}{suffix}"
+    # Keep the name as is: a case-folded suffix would make an in-place
+    # conversion of X.PDF copy it to X.pdf on case-sensitive filesystems.
+    source_copy = output_dir / source.name
     out_md = output_dir / f"{stem}.md"
     images_dir = output_dir / f"{stem}.images"
     image_map_path = output_dir / f"{stem}.image-map.json"
