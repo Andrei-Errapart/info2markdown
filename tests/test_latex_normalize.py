@@ -53,3 +53,28 @@ def test_normalize_math_strips_mathsf_and_number_thinspace():
             == r"$$V_{TH}=12$$")
     assert _normalize_math(r"$$x=84.4\,\upmu H$$") == r"$$x=84.4\,\upmu H$$"
     assert _normalize_math(r"$$y=41\,0$$") == r"$$y=410$$"
+
+
+# An inline formula directly followed by a stray "$" reads as the start of a
+# $$...$$ span. Before the fix, that span ran to the next real display formula,
+# however far away, and normalising it stripped every space in between: in a
+# TI datasheet (ADS58J63) 74,500 characters of prose, headings included, became
+# one word. Display math never spans a blank line, so it must stop there.
+STRAY = ("Scrambler $1+x^{14}+x^{15}$$ characters in the figure.\n\n"
+         "## 7.5.2.1 JESD204B Initial Lane Alignment (ILA)\n\n"
+         "The initial lane alignment process is started by the receiver.\n\n"
+         "$$V _ { x } = 1$$\n")
+
+
+def test_display_math_does_not_run_across_paragraphs():
+    out = _normalize_math(STRAY)
+    assert "## 7.5.2.1 JESD204B Initial Lane Alignment (ILA)" in out
+    assert "The initial lane alignment process is started by the receiver." in out
+    assert "$$V_{x}=1$$" in out
+
+
+def test_subscripts_still_standardised_after_a_stray_display_delimiter():
+    from pdf2markdown import _standardize_subscripts
+    md = _normalize_math("$$R _ { B L K } = 1$$\n\nA stray $x$$ here.\n\n"
+                         "The value of R BLK is set.\n\n$$y = 2$$\n")
+    assert "The value of $R_{BLK}$ is set." in _standardize_subscripts(md)

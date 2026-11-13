@@ -797,6 +797,12 @@ def _strip_font_commands(latex: str) -> str:
     return latex
 
 
+# A $$...$$ display formula. It never spans a blank line: an inline formula
+# directly followed by a stray "$" looks like an opening "$$", and without this
+# limit the "formula" ran on to the next real one, however far away.
+_DISPLAY_MATH = r"\$\$((?:(?!\n[ \t]*\n).)+?)\$\$"
+
+
 def _normalize_math(md: str) -> str:
     """Normalise the LaTeX inside every ``$$...$$`` and ``$...$`` span (only
     spans that look like math, to leave a stray ``$`` in prose alone)."""
@@ -806,7 +812,7 @@ def _normalize_math(md: str) -> str:
         inner = _normalize_latex(inner)
         inner = _strip_font_commands(inner)
         return _THIN_SPACE_IN_NUMBER_RE.sub("", inner)
-    md = re.sub(r"\$\$(.+?)\$\$", lambda m: f"$${norm(m.group(1))}$$", md, flags=re.S)
+    md = re.sub(_DISPLAY_MATH, lambda m: f"$${norm(m.group(1))}$$", md, flags=re.S)
     md = re.sub(r"(?<!\$)\$(?!\$)([^$\n]+?)\$(?!\$)",
                 lambda m: f"${norm(m.group(1))}$", md)
     return md
@@ -816,7 +822,7 @@ def _normalize_math(md: str) -> str:
 # words/acronyms in prose, so they are not standardised. Tune here.
 SUBSCRIPT_MIN_SUB_LEN = 2
 # A $$...$$ / $...$ span, captured so re.split keeps it.
-_MATH_SPAN_RE = re.compile(r"(\$\$.+?\$\$|(?<!\$)\$(?!\$)[^$\n]+?\$(?!\$))", re.S)
+_MATH_SPAN_RE = re.compile(r"(\$\$(?:(?!\n[ \t]*\n).)+?\$\$|(?<!\$)\$(?!\$)[^$\n]+?\$(?!\$))", re.S)
 # X_{sub} with a plain alphanumeric subscript (skips V_{OUT(nom)}, t_{\max off}).
 _EQ_VAR_RE = re.compile(r"([A-Za-z])_\{([A-Za-z][A-Za-z0-9]*)\}")
 
