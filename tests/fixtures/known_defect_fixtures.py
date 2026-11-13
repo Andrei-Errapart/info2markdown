@@ -40,17 +40,21 @@ def make_register_bit_diagram_png(
     field names. Two diagrams for different registers share the frame/grid
     structure but differ in every text label — visually distinct content on a
     structurally identical template, like consecutive register figures in a
-    hardware manual."""
+    hardware manual.
+
+    The lines are as heavy as in a real manual's figures at this size: with a
+    2 px frame and a 1 px grid, docling 2.150's layout model no longer saw the
+    picture at all, while the register figures of real manuals still convert."""
     from PIL import Image, ImageDraw
 
     img = Image.new("RGB", (480, 160), (255, 255, 255))
     draw = ImageDraw.Draw(img)
-    draw.rectangle([4, 4, 475, 155], outline=(0, 0, 0), width=2)
+    draw.rectangle([4, 4, 475, 155], outline=(0, 0, 0), width=4)
     draw.text((10, 8), title, fill=(0, 0, 0))
     # Bit-cell grid: header band and value band split by a horizontal divider.
-    draw.line([(6, 80), (473, 80)], fill=(0, 0, 0), width=1)
+    draw.line([(6, 80), (473, 80)], fill=(0, 0, 0), width=3)
     for x in range(10, 471, 30):
-        draw.line([(x, 30), (x, 130)], fill=(0, 0, 0), width=1)
+        draw.line([(x, 30), (x, 130)], fill=(0, 0, 0), width=3)
     for i, field in enumerate(fields):
         draw.text((14 + (i * 110) % 330, 90 + 20 * ((i * 110) // 330)), field, fill=(0, 0, 0))
     path = directory / f"{name}.png"
